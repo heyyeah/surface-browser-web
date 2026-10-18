@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Surface Browser live</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #fff; --ink: #1d1d1b; --muted: #74746e; --line: #e2e2dc;
+    --accent: #2f6fde; --ok: #1f8a4c; --bad: #c2412d;
+    font: 14px/1.4 system-ui, -apple-system, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151514; --panel: #1f1f1d; --ink: #ecece8; --muted: #9a9a92; --line: #33332f; --accent: #7aa7ff; --ok: #5fcf8e; --bad: #ff8a73; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px 16px 40px; background: var(--bg); color: var(--ink); }
+  main { max-width: 1100px; margin: 0 auto; }
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 15px; margin: 28px 0 10px; }
+  .muted { color: var(--muted); }
+  .live { font-weight: 600; color: var(--ok); }
+  .stale { color: var(--bad); }
+  table { border-collapse: collapse; width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  .grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  .session { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+  .session.idle { opacity: .6; }
+  .session-head { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+  .session-head b { font-variant-numeric: tabular-nums; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--muted); }
+  .active .dot { background: var(--ok); }
+  ol { list-style: none; margin: 8px 0 0; padding: 0; }
+  li { display: grid; grid-template-columns: 64px 56px minmax(0, 1fr); gap: 8px; padding: 3px 0; border-top: 1px dashed var(--line); }
+  li .text { overflow-wrap: anywhere; }
+  li.failed .text { color: var(--bad); }
+  .kind { font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--accent); padding-top: 2px; }
+  .empty { padding: 16px; text-align: center; background: var(--panel); border: 1px dashed var(--line); border-radius: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Surface Browser live</h1>
+    <span id="status" class="muted">connecting…</span>
+  </header>
+
+  <div class="grid">
+    <section>
+      <h2>Counts</h2>
+      <table>
+        <thead><tr><th></th><th class="num">Today (UTC)</th><th class="num" id="total-head">Total</th></tr></thead>
+        <tbody id="counts"></tbody>
+      </table>
+      <p class="muted" id="cost"></p>
+    </section>
+    <section>
+      <h2>Countries</h2>
+      <table>
+        <thead><tr><th>Country</th><th class="num">Today</th><th class="num">Total</th></tr></thead>
+        <tbody id="countries"></tbody>
+      </table>
+      <p class="muted" id="geo-note"></p>
+    </section>
+    <section>
+      <h2>Devices</h2>
+      <table>
+        <thead><tr><th>Device</th><th class="num">Today</th><th class="num">Total</th></tr></thead>
+        <tbody id="devices"></tbody>
+      </table>
+      <p class="muted">From the browser's user agent. Pico and Vision Pro do not name the model.</p>
+    </section>
+  </div>
+
+  <h2 id="sessions-head">Visitors</h2>
+  <div id="sessions"></div>
+  <p class="muted">A visitor is one page load, so a reload shows up as a new one. Visitors are kept in memory for 30 minutes after their last request; no addresses are stored.</p>
+</main>
+
+<script>
+const LABELS = {
+  visits: "Visitors",
+  pages: "Pages loaded",
+  searches: "Image searches",
+  aiRequests: "AI requests",
+  aiImagesMade: "AI images made (paid)",
+  aiImagesShown: "AI images shown",
+  imagesShown: "Web images shown",
+  imageCacheHits: "…of which from cache"
+};
+const regionNames = (() => {
+  try { return new Intl.DisplayNames(["en"], { type: "region" }); } catch { return null; }
+})();
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") node.className = value; else node.setAttribute(key, value);
+  }
+  for (const child of children) node.append(child instanceof Node ? child : document.createTextNode(String(child ?? "")));
+  return node;
+}
+const fmt = (n) => Number(n || 0).toLocaleString("en");
+const clock = (ms) => new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+function ago(ms, now) {
+  const s = Math.max(0, Math.round((now - ms) / 1000));
+  return s < 60 ? `${s}s ago` : `${Math.round(s / 60)} min ago`;
+}
+function countryName(code) {
+  if (!code || code === "??") return "unknown";
+  try { return regionNames?.of(code) || code; } catch { return code; }
+}
+
+function render(data) {
+  document.getElementById("total-head").textContent = `Since ${data.firstDay}`;
+  document.getElementById("counts").replaceChildren(...Object.entries(LABELS).map(([key, label]) =>
+    el("tr", {}, el("td", {}, label), el("td", { class: "num" }, fmt(data.today[key])), el("td", { class: "num" }, fmt(data.total[key])))
+  ));
+  document.getElementById("cost").textContent = data.spend.active
+    ? `Estimated provider cost today: $${data.spend.estimatedUsd.toFixed(2)} · cap ${fmt(data.spend.limits.genai.global)} images, ${fmt(data.spend.limits.search.global)} searches per day`
+    : "Spend guard is off on this server, so paid images are not counted.";
+
+  const codes = Object.keys(data.total.countries).sort((a, b) => data.total.countries[b] - data.total.countries[a]);
+  document.getElementById("countries").replaceChildren(...(codes.length ? codes.map((code) =>
+    el("tr", {}, el("td", {}, countryName(code)), el("td", { class: "num" }, fmt(data.today.countries[code])), el("td", { class: "num" }, fmt(data.total.countries[code])))
+  ) : [el("tr", {}, el("td", { colspan: "3", class: "muted" }, "No visitors yet."))]));
+  const devices = Object.keys(data.total.devices || {}).sort((a, b) => data.total.devices[b] - data.total.devices[a]);
+  document.getElementById("devices").replaceChildren(...(devices.length ? devices.map((device) =>
+    el("tr", {}, el("td", {}, device), el("td", { class: "num" }, fmt(data.today.devices?.[device])), el("td", { class: "num" }, fmt(data.total.devices[device])))
+  ) : [el("tr", {}, el("td", { colspan: "3", class: "muted" }, "No visitors yet."))]));
+  document.getElementById("geo-note").textContent = data.geoIp
+    ? "Country data: DB-IP (db-ip.com), CC BY 4.0."
+    : "No country database configured (GEOIP_COUNTRY_DB).";
+
+  document.getElementById("sessions-head").textContent =
+    `Visitors · ${data.activeCount} active in the last 5 minutes, ${data.sessions.length} in the last 30`;
+  const list = document.getElementById("sessions");
+  if (!data.sessions.length) {
+    list.replaceChildren(el("div", { class: "empty muted" }, "Nobody here right now."));
+    return;
+  }
+  list.replaceChildren(...data.sessions.map((session) => {
+    const events = session.events.length
+      ? el("ol", {}, ...session.events.map((event) => el("li", { class: event.failed ? "failed" : "" },
+          el("span", { class: "muted" }, clock(event.at)),
+          el("span", { class: "kind" }, event.kind),
+          el("span", { class: "text" }, event.text || "", event.note ? el("span", { class: "muted" }, ` — ${event.note}`) : "")
+        )))
+      : el("p", { class: "muted" }, "Looking at the start screen.");
+    return el("div", { class: `session ${session.active ? "active" : "idle"}` },
+      el("div", { class: "session-head" },
+        el("span", { class: "dot" }),
+        el("b", {}, countryName(session.country)),
+        el("span", {}, session.device),
+        el("span", { class: "muted" }, `arrived ${clock(session.firstSeen)} · last seen ${ago(session.lastSeen, data.now)} · ${fmt(session.requests)} ${session.requests === 1 ? "request" : "requests"}`)
+      ),
+      events
+    );
+  }));
+}
+
+async function poll() {
+  const status = document.getElementById("status");
+  try {
+    const response = await fetch("/admin/live.json", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    render(data);
+    status.className = "live";
+    status.textContent = `live · updated ${clock(data.now)}`;
+  } catch (err) {
+    status.className = "stale";
+    status.textContent = `not updating: ${err.message}`;
+  }
+  setTimeout(poll, 2000);
+}
+poll();
+</script>
+</body>
+</html>

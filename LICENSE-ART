@@ -1,0 +1,44 @@
+# Licence for the artwork
+
+The *software* in this repository is MIT licensed — see [LICENSE](LICENSE).
+This file covers the *artwork*, which is not.
+
+Surface Browser is an artwork by **Tim Plaisted**, originally commissioned by
+NESTA with additional support from ACMI, IMA and ZKM. The code is offered
+freely so that people can run the piece, study it, and build on it. The work
+itself is not offered for commercial reuse or for re-exhibition under someone
+else's name.
+
+## What this file covers
+
+Licensed **CC BY-NC-SA 4.0**
+(<https://creativecommons.org/licenses/by-nc-sa/4.0/>, full legal code at
+<https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode>):
+
+- The curated image corpus and any bookmark sets shipped with a release,
+  including pre-generated images.
+- The visual and spatial design of the piece — the tunnel-to-sphere
+  transition, the arrangement and motion of images, the interaction model.
+- Exhibition identity: the name "Surface Browser", the project's presentation
+  materials, and any accompanying text.
+
+In short: **attribute, don't sell, share alike.** You may run the piece, remix
+it, show it to people and teach with it, provided you credit Tim Plaisted and
+release derivatives on the same terms. You may not exhibit it commercially or
+present it as your own work.
+
+## What this file does not cover
+
+- **All source code**, in every language, in every directory of this
+  repository — that is MIT, and deliberately so. Fork it, sell what you build
+  with it, no permission needed.
+- **Images fetched at runtime** from the web, from a search provider, or
+  returned by an image-generation model. Those are not ours to license; they
+  belong to whoever made them. The software is a browser — what it displays
+  passes through it.
+- **Third-party dependencies**, which carry their own licences.
+
+## Asking
+
+For exhibition, commercial use, or anything this file does not obviously
+permit, ask: <https://boxc.net/surfacebrowser.html>. The answer is usually yes.

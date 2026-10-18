@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover lets the page paint under a notch/home indicator;
+         the safe-area insets in styles.css are what keep controls out from
+         under them. Without cover, env(safe-area-inset-*) is always 0. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Surface Browser VR/WebXR</title>
+    <!-- /tests is a static page. The host only serves a path that names a
+         file, and answers a bare directory with this app instead. /git is the
+         short address the daily-limit messages give for the source. -->
+    <script>
+      {
+        const path = location.pathname;
+        if (/^\/tests\/?$/.test(path)) {
+          location.replace("/tests/index.html");
+        } else if (/^\/git\/?$/.test(path)) {
+          location.replace("https://github.com/heyyeah/surface-browser-web");
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="app">
+      <header class="toolbar">
+        <div class="toolbar-row">
+          <!-- Back is deliberately not a touch gesture (docs/touch_controls.md
+               §3.6), so it is a visible control instead. Leading position, like
+               a browser. Same goBack() the VR left stick press calls. -->
+          <button id="back-btn" class="secondary nav-btn" type="button" aria-label="Back" title="Back" data-i18n-attr="aria-label:nav.back,title:nav.back" disabled>
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 4.5 7.5 12l7.5 7.5" />
+            </svg>
+          </button>
+          <div class="omnibar">
+            <input id="url-input" type="text" placeholder="Enter URL or image search" spellcheck="false" data-i18n-attr="placeholder:omnibar.placeholder" />
+            <div class="mode-toggle" role="group" aria-label="Load mode" data-i18n-attr="aria-label:mode.group">
+              <button id="mode-url-btn" class="mode-toggle-btn mode-web" type="button" aria-pressed="true" aria-label="URL mode" title="URL mode" data-i18n-attr="aria-label:mode.url,title:mode.url">
+                <svg class="mode-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M10 13a5 5 0 0 0 7.1 0l2.2-2.2a5 5 0 0 0-7.1-7.1L11 4.9" />
+                  <path d="M14 11a5 5 0 0 0-7.1 0l-2.2 2.2a5 5 0 0 0 7.1 7.1L13 19.1" />
+                </svg>
+              </button>
+              <button id="mode-search-btn" class="mode-toggle-btn mode-search" type="button" aria-pressed="false" aria-label="Image search mode" title="Image search mode" data-i18n-attr="aria-label:mode.search,title:mode.search">
+                <svg class="mode-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="11" cy="11" r="5.5" />
+                  <path d="m16 16 4 4" />
+                  <path d="M8.5 11.5 10.4 13l3.1-4" />
+                </svg>
+              </button>
+              <button id="mode-genai-btn" class="mode-toggle-btn mode-genai" type="button" aria-pressed="false" aria-label="GenAI mode" title="Configure GenAI in settings" data-i18n-attr="aria-label:mode.genai">
+                <svg class="mode-icon mode-icon-fill" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 2.5 14.8 9l6.7 3-6.7 3L12 21.5 9.2 15l-6.7-3 6.7-3L12 2.5Z" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <!-- PORTRAIT LINE BREAK. Flex wrapping cannot be forced with a
+               flex-basis alone: flex-shrink defaults to 1 on every item, so a
+               wide omnibar just shrinks and everything stays on one line (which
+               is exactly what happened on Tim's phone, 2026-08-30). A zero-height
+               item with flex-basis:100% is the only reliable break, and it is
+               display:none outside portrait so landscape and desktop are
+               untouched. -->
+          <div class="toolbar-break" aria-hidden="true"></div>
+          <div class="bookmark-picker">
+            <button id="bookmarks-btn" class="secondary" aria-expanded="false" aria-controls="bookmarks-menu" data-i18n="nav.bookmarks">Bookmarks</button>
+            <div id="bookmarks-menu" class="bookmark-menu" role="menu" hidden></div>
+          </div>
+          <button id="exit-vr-btn" class="secondary" data-i18n="vr.enter">Enter VR</button>
+          <div class="shortcut-picker">
+            <button id="shortcuts-btn" class="secondary help-btn" aria-expanded="false" aria-controls="shortcuts-menu" aria-label="Help" title="Help" data-i18n-attr="aria-label:nav.help,title:nav.help">?</button>
+            <div id="shortcuts-menu" class="shortcuts-menu" role="menu" hidden></div>
+          </div>
+          <div class="shortcut-picker">
+            <button id="language-btn" class="secondary help-btn" aria-expanded="false" aria-controls="language-menu" aria-label="Language" title="Language" data-i18n-attr="aria-label:help.language.title,title:help.language.title">&#127760;</button>
+            <div id="language-menu" class="shortcuts-menu language-menu" role="menu" hidden></div>
+          </div>
+          <button id="settings-btn" class="secondary" hidden aria-label="Settings" aria-haspopup="dialog" title="Settings">&#9881;</button>
+        </div>
+        <div class="toolbar-row toolbar-row-small" data-dev-only hidden>
+          <label>Rings <input id="rings-input" type="number" min="300" max="10000" step="100" value="2200" /></label>
+          <label>Segments <input id="segments-input" type="number" min="8" max="256" step="1" value="256" /></label>
+          <label>Speed <input id="speed-input" type="range" min="4" max="45" step="0.5" value="13" /></label>
+          <label><input id="fallback-input" type="checkbox" checked /> Fallback extraction</label>
+          <button id="focus-url-btn" class="secondary">Focus URL</button>
+          <button id="jump-sphere-btn" class="secondary">Jump to Sphere</button>
+          <button id="rebuild-btn" class="secondary">Rebuild Tunnel</button>
+          <span id="build-label" class="build-label"></span>
+        </div>
+        <div class="toolbar-row toolbar-row-meta" data-dev-only hidden>
+          <span id="state-label"></span>
+          <span id="status-label">Idle</span>
+          <span id="extract-label"></span>
+          <span id="history-label"></span>
+          <span id="perf-label"></span>
+        </div>
+      </header>
+      <main class="canvas-shell">
+        <canvas id="scene-canvas" tabindex="0"></canvas>
+        <section id="start-panel" class="start-panel" aria-label="Favorites" data-i18n-attr="aria-label:start.aria" hidden></section>
+        <!-- The two-finger confirm hold's progress ring (docs/touch_controls.md
+             §3.5). Purely a readout, never a target: pointer-events are off so
+             it cannot eat the very touches that are drawing it. -->
+        <!-- First-run sphere onboarding (src/onboarding.js). pointer-events are
+             off for the same reason as the confirm ring below: it is a readout,
+             never a target, and an overlay that ate the first drag would be
+             teaching a gesture while preventing it. -->
+        <div id="sphere-onboarding" class="sphere-onboarding" role="status" aria-live="polite" hidden></div>
+        <div id="touch-chord-ring" class="touch-chord-ring" aria-hidden="true" hidden>
+          <svg viewBox="0 0 44 44" width="44" height="44" focusable="false">
+            <circle class="touch-chord-ring-track" cx="22" cy="22" r="18"></circle>
+            <circle class="touch-chord-ring-arc" cx="22" cy="22" r="18"></circle>
+          </svg>
+        </div>
+        <div id="status-footer" class="status-footer" role="status" aria-live="polite" hidden></div>
+      </main>
+      <!-- The image-URL strip. The disclosure lives OUTSIDE #results because
+           renderResults() in api.js clears #results wholesale on every load —
+           a header inside it would be wiped by the next extraction. -->
+      <section class="results-shell" id="results-shell">
+        <div class="results-header">
+          <button
+            id="results-toggle"
+            class="results-toggle"
+            type="button"
+            aria-expanded="true"
+            aria-controls="results"
+          >
+            <span class="results-chevron" aria-hidden="true"></span>
+            <span class="results-toggle-label" data-i18n="results.title">Images</span>
+            <span id="results-count" class="results-count"></span>
+          </button>
+        </div>
+        <aside class="results" id="results" aria-label="Extracted image URLs" data-i18n-attr="aria-label:results.aria"></aside>
+      </section>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+  </html>

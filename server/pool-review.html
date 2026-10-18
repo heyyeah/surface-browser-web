@@ -1,0 +1,312 @@
+<!doctype html>
+<!--
+  Curated pool review. Served ONLY by the local-only /admin/pool route in
+  server/index.js; it is not a Vite entry point and never reaches dist/.
+
+  Deliberately plain: no build step, no CDN, no framework. It is a local admin
+  tool for one person, not part of the artwork.
+
+  Deleting here writes a tombstone. The bytes stay where they are (the pack, or
+  the grown store) and a
+  restore brings them straight back, which is why the destructive button says
+  "hide" work rather than pretending to erase anything.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Curated pool review</title>
+<style>
+  :root { color-scheme: light dark; --line: #8884; --dim: #7b7b84; --bad: #c0392b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  header { position: sticky; top: 0; z-index: 3; padding: 10px 14px; border-bottom: 1px solid var(--line); background: Canvas; }
+  h1 { margin: 0 0 4px; font-size: 15px; }
+  .meta { color: var(--dim); font-size: 12px; }
+  .meta code { font-size: 11px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-end; margin-top: 10px; }
+  label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--dim); }
+  input, select, button { font: inherit; padding: 3px 6px; }
+  button { cursor: pointer; }
+  .inline { flex-direction: row; align-items: center; gap: 5px; }
+  main { padding: 14px; }
+  section.prompt { margin-bottom: 26px; }
+  section.prompt > h2 { font-size: 14px; margin: 0 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  .base { margin: 0 0 16px 0; padding-left: 10px; border-left: 3px solid var(--line); }
+  .base > h3 { font-size: 12px; margin: 0 0 6px; display: flex; align-items: center; gap: 8px; }
+  .keyrow { margin: 8px 0 10px; }
+  .keyrow > h4 { font-size: 12px; margin: 0 0 4px; font-weight: 600; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .depth { font-weight: 400; color: var(--dim); }
+  .depth.thin { color: var(--bad); font-weight: 600; }
+  .grid { display: flex; flex-wrap: wrap; gap: 6px; }
+  figure { margin: 0; width: 132px; position: relative; }
+  figure img { width: 132px; height: 106px; object-fit: cover; background: #8882; display: block; border-radius: 3px; cursor: zoom-in; }
+  figure.hidden img { opacity: .3; filter: grayscale(1); }
+  figure.grown img { outline: 2px solid #2e86de; outline-offset: -2px; }
+  figure figcaption { font-size: 10px; color: var(--dim); word-break: break-all; }
+  figure input { position: absolute; top: 4px; left: 4px; margin: 0; width: 16px; height: 16px; }
+  .tag { position: absolute; top: 4px; right: 4px; background: var(--bad); color: #fff; font-size: 9px; padding: 1px 4px; border-radius: 2px; }
+  .pick { font-size: 11px; background: none; border: none; color: inherit; text-decoration: underline; padding: 0; }
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 4; display: none; gap: 10px; align-items: center;
+         padding: 10px 14px; border-top: 1px solid var(--line); background: Canvas; }
+  #bar.on { display: flex; }
+  #bar .danger { color: #fff; background: var(--bad); border: 1px solid var(--bad); border-radius: 3px; padding: 4px 10px; }
+  #lightbox { position: fixed; inset: 0; z-index: 5; display: none; align-items: center; justify-content: center;
+              background: #000d; padding: 20px; cursor: zoom-out; }
+  #lightbox.on { display: flex; }
+  #lightbox img { max-width: 100%; max-height: 82vh; object-fit: contain; }
+  #lightbox figcaption { color: #fff; font-size: 12px; text-align: center; margin-top: 8px; word-break: break-all; }
+  .warn { color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Curated pool review</h1>
+  <div class="meta" id="summary">loading…</div>
+  <div class="filters">
+    <label>created from<input type="date" id="from"></label>
+    <label>created to<input type="date" id="to"></label>
+    <label>prompt contains<input type="search" id="prompt" size="22"></label>
+    <label>emoji<select id="emoji"><option value="">any</option></select></label>
+    <label class="inline"><input type="checkbox" id="showHidden" checked> show deleted</label>
+    <button id="reload">Apply</button>
+    <button id="clearFilters">Clear filters</button>
+  </div>
+</header>
+
+<main id="out"></main>
+
+<div id="bar">
+  <span id="count"></span>
+  <button id="restore">Restore</button>
+  <button id="delete" class="danger">Delete…</button>
+  <button id="clearSel">Clear selection</button>
+  <span id="confirm" hidden></span>
+</div>
+
+<div id="lightbox"><figure><img alt=""><figcaption></figcaption></figure></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const selected = new Set();
+let data = null;
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function query() {
+  const params = new URLSearchParams();
+  for (const id of ["from", "to", "prompt", "emoji"]) {
+    if ($(id).value) params.set(id, $(id).value);
+  }
+  if (!$("showHidden").checked) params.set("suppressed", "0");
+  return params.toString();
+}
+
+async function load() {
+  const res = await fetch(`/api/pool/members?${query()}`);
+  if (!res.ok) {
+    $("out").innerHTML = `<p class="warn">${esc(res.status)} — this page is local-only and needs GENAI_POOL_DIR or GENAI_POOL_GROW_DIR set.</p>`;
+    return;
+  }
+  data = await res.json();
+  fillEmoji();
+  renderSummary();
+  render();
+  syncBar();
+}
+
+function fillEmoji() {
+  const select = $("emoji");
+  const keep = select.value;
+  select.innerHTML = '<option value="">any</option>' +
+    data.facets.emoji.map((e) => `<option value="${esc(e)}">${esc(e)}</option>`).join("");
+  select.value = keep;
+}
+
+function renderSummary() {
+  const p = data.pack;
+  $("summary").innerHTML = [
+    p.dir ? `pack <code>${esc(p.dir)}</code>` : "no pack",
+    data.grow.dir ? `grown <code>${esc(data.grow.dir)}</code> (at most ${data.grow.maxPerKey} per key)` : "",
+    data.grow.error ? `<span class="warn">growth off: ${esc(data.grow.error)}</span>` : "",
+    `${p.keyCount} keys`,
+    `<strong>${p.memberCount} drawable</strong> of ${p.totalMembers} (${p.totalMembers - p.grownMembers} baked, ${p.grownMembers} grown)`,
+    `${p.suppressedCount} deleted`,
+    p.missingFiles ? `<span class="warn">${p.missingFiles} manifest entries have no file</span>` : "",
+    `tombstones: <code>${esc(data.suppression.path)}</code>`,
+    data.suppression.error ? `<span class="warn">${esc(data.suppression.error)}</span>` : "",
+    p.error ? `<span class="warn">pack not loaded: ${esc(p.error)}</span>` : ""
+  ].filter(Boolean).join(" · ");
+}
+
+// Group the flat key list the way the pack is actually shaped: a bookmark
+// prompt holds base images, and each base holds its own emoji variation pools.
+// A variation names its base by that base image's content address (sourceKey).
+function group() {
+  const bases = new Map();
+  const prompts = new Map();
+  const promptFor = (name) => {
+    if (!prompts.has(name)) prompts.set(name, { name, bases: [], orphans: [] });
+    return prompts.get(name);
+  };
+  for (const key of data.keys) {
+    if (key.kind !== "base") continue;
+    const bucket = promptFor(key.prompt);
+    for (const member of key.members) {
+      const base = { member, key, variations: [] };
+      bases.set(member.id, base);
+      bucket.bases.push(base);
+    }
+  }
+  for (const key of data.keys) {
+    if (key.kind === "base") continue;
+    const base = bases.get(key.sourceKey);
+    if (base) base.variations.push(key);
+    else promptFor(key.prompt).orphans.push(key);
+  }
+  for (const bucket of prompts.values()) {
+    for (const base of bucket.bases) base.variations.sort((a, b) => String(a.emoji).localeCompare(String(b.emoji)));
+    bucket.orphans.sort((a, b) => String(a.emoji).localeCompare(String(b.emoji)));
+  }
+  return [...prompts.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function depthLabel(key) {
+  const thin = key.depth === 0 ? " thin" : "";
+  const hidden = key.suppressedDepth ? ` · ${key.suppressedDepth} deleted` : "";
+  return `<span class="depth${thin}">depth ${key.depth}${hidden}</span>`;
+}
+
+function tile(member) {
+  const bits = [
+    member.store === "grown" ? "grown" : "baked",
+    member.emoji || "base",
+    member.bakedAt ? member.bakedAt.slice(0, 16).replace("T", " ") : "no date",
+    member.width && member.height ? `${member.width}x${member.height}` : "",
+    member.seed === null ? "" : `seed ${member.seed}`
+  ].filter(Boolean).join(" · ");
+  return `<figure class="${member.suppressed ? "hidden" : ""}${member.store === "grown" ? " grown" : ""}">
+    <input type="checkbox" data-id="${esc(member.id)}" ${selected.has(member.id) ? "checked" : ""}>
+    ${member.suppressed ? '<span class="tag">deleted</span>' : ""}
+    <img loading="lazy" src="/api/pool/image/${esc(member.id)}?w=256" data-id="${esc(member.id)}"
+         data-caption="${esc(member.file)} — ${esc(bits)}" alt="${esc(member.file)}">
+    <figcaption>${esc(bits)}</figcaption>
+  </figure>`;
+}
+
+function keyBlock(key, heading) {
+  return `<div class="keyrow">
+    <h4>${heading} ${depthLabel(key)}
+      <button class="pick" data-key="${esc(key.key)}">select these ${key.members.length}</button></h4>
+    <div class="grid">${key.members.map(tile).join("")}</div>
+  </div>`;
+}
+
+function render() {
+  const groups = group();
+  if (!groups.length) {
+    $("out").innerHTML = "<p>Nothing matches these filters.</p>";
+    return;
+  }
+  $("out").innerHTML = groups.map((bucket) => {
+    const bases = bucket.bases.map((base) => {
+      const variations = base.variations.map((key) =>
+        keyBlock(key, `${esc(key.emoji || "—")} <span class="depth">${key.width}x${key.height}${key.strength === null ? "" : ` · strength ${key.strength}`}</span>`)
+      ).join("") || '<div class="keyrow"><h4><span class="depth thin">no variations baked from this base</span></h4></div>';
+      return `<div class="base">
+        <h3>base ${esc(base.member.id.slice(0, 12))} ${depthLabel(base.key)}</h3>
+        <div class="grid">${tile(base.member)}</div>
+        ${variations}
+      </div>`;
+    }).join("");
+    const orphans = bucket.orphans.length
+      ? `<div class="base"><h3>variations whose base is not in this view</h3>${
+          bucket.orphans.map((key) => keyBlock(key, esc(key.emoji || "—"))).join("")}</div>`
+      : "";
+    const totals = bucket.bases.length + bucket.orphans.length;
+    return `<section class="prompt"><h2>${esc(bucket.name || "(no prompt)")}
+      <span class="depth">${bucket.bases.length} base(s), ${totals} group(s)</span></h2>${bases}${orphans}</section>`;
+  }).join("");
+}
+
+function syncBar() {
+  $("bar").classList.toggle("on", selected.size > 0);
+  $("count").textContent = `${selected.size} selected`;
+  $("confirm").hidden = true;
+  $("delete").textContent = "Delete…";
+}
+
+async function suppress(suppressed) {
+  const ids = [...selected];
+  const res = await fetch("/api/pool/suppress", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids, suppressed })
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    alert(body.error || `Failed: ${res.status}`);
+    return;
+  }
+  selected.clear();
+  await load();
+}
+
+$("out").addEventListener("click", (event) => {
+  const box = event.target.closest("input[type=checkbox][data-id]");
+  if (box) {
+    if (box.checked) selected.add(box.dataset.id);
+    else selected.delete(box.dataset.id);
+    syncBar();
+    return;
+  }
+  const pick = event.target.closest("button.pick");
+  if (pick) {
+    // Bounded on purpose: selection is offered per key and nowhere wider, so
+    // no single click can put the whole pool in front of the delete button.
+    const key = data.keys.find((entry) => entry.key === pick.dataset.key);
+    for (const member of key?.members || []) selected.add(member.id);
+    render();
+    syncBar();
+    return;
+  }
+  const img = event.target.closest("img[data-id]");
+  if (img) {
+    $("lightbox").querySelector("img").src = `/api/pool/image/${encodeURIComponent(img.dataset.id)}`;
+    $("lightbox").querySelector("figcaption").textContent = img.dataset.caption;
+    $("lightbox").classList.add("on");
+  }
+});
+
+$("lightbox").addEventListener("click", () => {
+  $("lightbox").classList.remove("on");
+  $("lightbox").querySelector("img").src = "";
+});
+
+$("delete").addEventListener("click", () => {
+  // Two steps, always: the first click only asks.
+  if ($("confirm").hidden) {
+    $("confirm").hidden = false;
+    $("confirm").textContent = `Hide ${selected.size} image(s) from the pool? The files stay in the pack and Restore brings them back.`;
+    $("delete").textContent = `Yes, delete ${selected.size}`;
+    return;
+  }
+  suppress(true);
+});
+$("restore").addEventListener("click", () => suppress(false));
+$("clearSel").addEventListener("click", () => { selected.clear(); render(); syncBar(); });
+$("reload").addEventListener("click", () => load());
+$("clearFilters").addEventListener("click", () => {
+  for (const id of ["from", "to", "prompt", "emoji"]) $(id).value = "";
+  $("showHidden").checked = true;
+  load();
+});
+for (const id of ["from", "to", "emoji", "showHidden"]) $(id).addEventListener("change", () => load());
+$("prompt").addEventListener("keydown", (event) => { if (event.key === "Enter") load(); });
+
+load();
+</script>
+</body>
+</html>

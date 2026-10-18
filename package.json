@@ -1,0 +1,32 @@
+{
+  "name": "surface-browser-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:api": "node server/index.js",
+    "build": "vite build",
+    "preview": "vite preview",
+    "bakeoff": "node scripts/genai_bakeoff.mjs",
+    "test": "node --test --test-concurrency=1 scripts/*.test.mjs",
+    "deps:check": "npm audit --omit=dev; npm outdated"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "cheerio": "^1.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
+    "express": "^5.1.0",
+    "mmdb-lib": "^3.0.3",
+    "sharp": "^0.35.5",
+    "three": "^0.186.1",
+    "undici": "^7.29.0"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.64.1"
+  },
+  "devDependencies": {
+    "vite": "^7.3.6"
+  }
+}

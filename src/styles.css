@@ -1,0 +1,1368 @@
+:root {
+  color-scheme: dark;
+  --bg: #05070d;
+  --panel: #101727;
+  --panel-border: #23314a;
+  --text: #dbe6ff;
+  --muted: #8ea1c2;
+  --accent: #53a9ff;
+  --mode-web: #53a9ff;
+  --mode-search: #64e29b;
+  --mode-genai: #c98bff;
+  --ok: #64e29b;
+  --warning: #b5becd;
+  --error: #ff6b7a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  /* MOBILE BROWSER CHROME. `height: 100%` resolves against the LARGE viewport —
+     the size the page would be if the address bar were hidden — so in a browser
+     with visible chrome the grid is taller than the screen and the bottom row is
+     pushed off. That is why the piece read correctly only when added to the Home
+     Screen and reopened as a web app, where there is no chrome (Tim, on a phone,
+     2026-08-30). `dvh` tracks the viewport as the chrome shows and hides.
+     The 100% above stays as the fallback for browsers without dvh. */
+  height: 100%;
+  height: 100dvh;
+  margin: 0;
+  background: radial-gradient(circle at 20% -20%, #1d365f 0%, var(--bg) 45%);
+  color: var(--text);
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+#app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+/* DESKTOP: the bar mostly gets out of the way (Tim, 2026-08-29 - "the top ui
+   bar could be mostly transparent and just the url bar is mostly
+   non-transparent and the buttons are not transparent"). Legibility is not at
+   risk here because nothing in the bar is text ON the scrim: the omnibar and
+   every .secondary button carry their own opaque grounds, and the only bare
+   text in the toolbar (the build/state/perf readouts) is dev-only and hidden in
+   a public build. The blur is what keeps a bright sky-blue tunnel from reading
+   through as noise behind the controls; the fallback below restores the old
+   near-opaque gradient where backdrop-filter is unsupported. Mobile keeps the
+   old bar - a phone in daylight needs the contrast. */
+.toolbar {
+  background: linear-gradient(180deg, rgba(10, 17, 29, 0.42), rgba(10, 17, 29, 0.22));
+  backdrop-filter: blur(14px) saturate(115%);
+  -webkit-backdrop-filter: blur(14px) saturate(115%);
+  border-bottom: 1px solid rgba(35, 49, 74, 0.75);
+  padding: 10px 12px;
+  /* Landscape on a notched phone puts the notch and the rounded corner in the
+     LEFT/RIGHT margins, which is where the toolbar's controls live. max() means
+     the inset can only ever add to the padding, never shrink it to zero on a
+     device that reports none. */
+  padding-top: max(10px, env(safe-area-inset-top, 0px));
+  padding-left: max(12px, env(safe-area-inset-left, 0px));
+  padding-right: max(12px, env(safe-area-inset-right, 0px));
+  display: grid;
+  gap: 8px;
+  /* MANDATORY, and the reason is the line above it. `backdrop-filter` creates a
+     STACKING CONTEXT, which traps the Bookmarks and ? menus (z-index: 20) inside
+     the toolbar instead of letting them paint into the root context as they did
+     when the bar was opaque. The toolbar and .canvas-shell are then two
+     z-index: auto boxes and DOM ORDER decides — the canvas comes second, so it
+     paints over them, and the menus opened BEHIND the tunnel (Tim, 2026-08-29,
+     desktop only, because mobile keeps the unblurred bar). Lifting the whole
+     toolbar above the canvas is the fix; 30 keeps it under the settings and
+     VR-unavailable overlays at 40. */
+  position: relative;
+  z-index: 30;
+}
+
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+  .toolbar {
+    background: linear-gradient(180deg, rgba(10, 17, 29, 0.92), rgba(10, 17, 29, 0.72));
+    border-bottom-color: var(--panel-border);
+  }
+}
+
+.toolbar-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.toolbar-row-small label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.build-label {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.82rem;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+input[type="text"],
+input[type="number"] {
+  border: 1px solid #2c4064;
+  background: #0b1321;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 7px 10px;
+}
+
+input[type="text"] {
+  min-width: 300px;
+  flex: 1;
+}
+
+input[type="number"] {
+  width: 90px;
+}
+
+.omnibar {
+  flex: 1 1 360px;
+  min-width: min(100%, 320px);
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: stretch;
+  border: 1px solid #2c4064;
+  border-radius: 8px;
+  background: #0b1321;
+  overflow: hidden;
+}
+
+.omnibar input[type="text"] {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+/* iOS Safari zooms the page when a focused field's text is under 16px, and
+   does not zoom back out on blur. */
+@media (pointer: coarse) {
+  .omnibar input[type="text"] {
+    font-size: 16px;
+  }
+}
+
+.mode-toggle {
+  display: inline-grid;
+  /* Auto columns, NOT repeat(3, 42px): the GenAI button is hidden whenever the
+     server has no relay configured, and a fixed three-column track kept its
+     42px slot anyway — an empty cell with a border, which reads as a broken
+     button rather than an absent one. */
+  grid-auto-flow: column;
+  grid-auto-columns: 42px;
+  border-left: 1px solid #2c4064;
+}
+
+.mode-toggle-btn {
+  width: 42px;
+  min-width: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-left: 1px solid rgba(142, 161, 194, 0.16);
+  border-radius: 0;
+  background: #111a2b;
+  color: var(--muted);
+  padding: 0;
+  line-height: 1;
+}
+
+.mode-toggle-btn:first-child {
+  border-left: 0;
+}
+
+.mode-toggle-btn.active {
+  box-shadow: inset 0 -3px currentColor;
+}
+
+.mode-toggle-btn.mode-web {
+  color: var(--mode-web);
+}
+
+.mode-toggle-btn.mode-search {
+  color: var(--mode-search);
+}
+
+.mode-toggle-btn.mode-genai {
+  color: var(--mode-genai);
+}
+
+.mode-toggle-btn.is-unconfigured {
+  color: #7b8498;
+  background: #151923;
+}
+
+.mode-toggle-btn[hidden] {
+  display: none;
+}
+
+.mode-icon {
+  width: 22px;
+  height: 22px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mode-icon-fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+input.load-error {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+input.load-muted {
+  border-color: #4c596d;
+  color: var(--muted);
+}
+
+button {
+  border: 1px solid #2d5f9a;
+  background: linear-gradient(180deg, #3b80ca, #2b609e);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(1.08);
+}
+
+button.secondary {
+  border-color: #4a5a76;
+  background: linear-gradient(180deg, #263242, #18212e);
+}
+
+.bookmark-picker,
+.shortcut-picker {
+  position: relative;
+}
+
+.bookmark-menu,
+.shortcuts-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(380px, calc(100vw - 24px));
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  background: rgba(7, 12, 20, 0.98);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.38);
+  padding: 6px;
+  /* Reaching the end of the list must not hand the scroll to the page. */
+  overscroll-behavior: contain;
+}
+
+.shortcuts-menu {
+  /* Wide enough for the two-column VR controller legend. */
+  width: min(460px, calc(100vw - 24px));
+}
+
+.language-menu {
+  width: max-content;
+  min-width: 150px;
+  max-width: calc(100vw - 24px);
+}
+
+.language-menu-item {
+  display: block;
+}
+
+.language-menu-item[aria-checked="true"] {
+  font-weight: 700;
+}
+
+.bookmark-menu-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.bookmark-menu-item:hover,
+.bookmark-menu-item:focus-visible {
+  background: #172238;
+  filter: none;
+  outline: none;
+}
+
+.bookmark-mode {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.bookmark-mode-1 {
+  color: var(--accent);
+}
+
+.bookmark-mode-2 {
+  color: var(--warning);
+}
+
+.bookmark-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcut-menu-item {
+  display: grid;
+  /* 86px on a phone, where the panel is narrow; wider once there is room, so
+     "Shift + click + hold" stops wrapping. */
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 7px 8px;
+  color: var(--text);
+}
+
+@media (min-width: 640px) {
+  .shortcut-menu-item {
+    grid-template-columns: 136px minmax(0, 1fr);
+  }
+}
+
+.shortcut-key {
+  color: var(--accent);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.shortcut-label {
+  color: var(--muted);
+}
+
+/* The one paragraph in the panel: what the three starting points ARE. Sits
+   above the first section title, which carries its own top border, so this
+   needs none of its own. */
+.shortcut-intro {
+  margin: 2px 8px 8px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+/* Carries the separator the removed .shortcut-about paragraph used to provide:
+   the credit is now the only thing between the last section and the build
+   stamp, and without a rule above it, it reads as another row. */
+.shortcut-copyright {
+  margin: 10px 8px 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--panel-border);
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.shortcut-intro a {
+  color: var(--mode-web, #6aa9ff);
+}
+
+.shortcut-github svg {
+  width: 1.15em;
+  height: 1.15em;
+  vertical-align: -0.2em;
+  fill: currentColor;
+}
+
+.shortcut-build {
+  margin: 0 8px 6px;
+  color: var(--muted);
+  font-size: 0.64rem;
+  letter-spacing: 0.02em;
+  opacity: 0.8;
+}
+
+.shortcut-section-title {
+  margin: 10px 8px 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--panel-border);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.shortcut-reveal-btn {
+  width: calc(100% - 16px);
+  margin: 8px;
+  border-color: #4a5a76;
+  background: #18212e;
+  text-align: left;
+}
+
+.shortcut-reveal-btn::after {
+  content: "+";
+  float: right;
+}
+
+.shortcut-reveal-btn[aria-expanded="true"]::after {
+  content: "-";
+}
+
+.shortcut-advanced {
+  padding-bottom: 4px;
+}
+
+.help-btn {
+  width: 38px;
+  min-width: 38px;
+  padding: 8px 0;
+  font-weight: 700;
+}
+
+/* Toolbar Back. Square-ish so it reads as a browser chrome control rather than
+   a labelled action, and wide enough to be a touch target on a phone. */
+/* Narrower than a .secondary text button because it holds one glyph: at 40px
+   square it read as chunky next to "Bookmarks" (Tim, 2026-08-29). Full height
+   is kept so it still lines up with the omnibar; only the width comes in. The
+   phone gets the 40px back below -- that is a thumb target, not a decoration. */
+.nav-btn {
+  width: 32px;
+  min-width: 32px;
+  min-height: 36px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.nav-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.nav-btn:disabled:hover {
+  filter: none;
+}
+
+.nav-icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.controller-map {
+  padding: 4px 6px 6px;
+}
+
+.controller-map-svg {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+}
+
+/* Official Meta Quest Touch Plus line art (see controllermap.js). Recolored
+   to the muted UI tone. Coordinates are in the art's own units, so stroke and
+   font sizes below are art-space, not px. */
+.cm-art {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cm-head {
+  fill: var(--muted);
+  font-size: 42px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+.cm-marker {
+  fill: rgba(11, 19, 33, 0.85);
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.cm-marker-num {
+  fill: var(--accent);
+  font-size: 30px;
+  font-weight: 700;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+.cm-legend {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 14px;
+  margin-top: 6px;
+}
+
+.cm-legend-head {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.cm-legend-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin-bottom: 3px;
+}
+
+.cm-legend-num {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+}
+
+.cm-legend-key {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cm-legend-label {
+  color: var(--muted);
+}
+
+.toolbar-row-meta {
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+#status-label.ok {
+  color: var(--ok);
+}
+
+#status-label.warning {
+  color: var(--warning);
+}
+
+#status-label.error {
+  color: var(--error);
+}
+
+.canvas-shell {
+  min-height: 0;
+  position: relative;
+}
+
+#scene-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  /* TOUCH PLATFORM CONSTRAINTS (docs/touch_controls.md §4). Each one is a way
+     the browser takes the gesture away, not a style preference:
+       touch-action           - or the browser claims pans and pinches before
+                                the app ever sees the pointer events;
+       -webkit-touch-callout  - or a finger held still (the BRAKE, and the
+       user-select              two-finger confirm hold) raises the iOS
+                                selection callout mid-gesture. */
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#scene-canvas.sphere-dragging {
+  cursor: grabbing;
+}
+
+/* The two-finger confirm hold's progress ring, drawn at the midpoint of the two
+   touches. It is the only feedback that distinguishes "I am about to spend"
+   from "nothing is happening" (§3.5), so it matches the VR exit-hold ring's
+   shape — a full track with an arc filling clockwise from twelve o'clock — in
+   the GenAI accent, rather than inventing a second progress language. */
+.touch-chord-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 7;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.touch-chord-ring-track {
+  fill: rgba(7, 12, 20, 0.55);
+  stroke: rgba(201, 139, 255, 0.22);
+  stroke-width: 4;
+}
+
+.touch-chord-ring-arc {
+  fill: none;
+  stroke: var(--mode-genai);
+  stroke-width: 4;
+  stroke-linecap: round;
+  /* 2 * PI * r, r = 18. The arc is drawn as one dash whose length is the
+     progress; rotating -90deg puts its start at twelve o'clock. */
+  stroke-dasharray: 113.097;
+  stroke-dashoffset: 113.097;
+  /* fill-box, or Safari resolves the origin against the whole SVG viewport and
+     the arc starts somewhere other than twelve o'clock. */
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  transform: rotate(-90deg);
+}
+
+.status-footer {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 6;
+  width: min(840px, calc(100% - 28px));
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  border: 1px solid rgba(83, 169, 255, 0.42);
+  border-radius: 8px;
+  background: rgba(7, 12, 20, 0.82);
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: center;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+/* The footer lets clicks through to the scene; only its link takes them. */
+.status-footer a {
+  color: var(--mode-web, #6aa9ff);
+  pointer-events: auto;
+}
+
+.start-panel {
+  position: absolute;
+  left: clamp(14px, 5vw, 56px);
+  right: clamp(14px, 5vw, 56px);
+  top: clamp(18px, 8vh, 72px);
+  z-index: 5;
+  display: grid;
+  gap: 14px;
+  max-width: 980px;
+  margin: 0 auto;
+  pointer-events: none;
+}
+
+.start-panel h1 {
+  margin: 0;
+  font-size: clamp(1.25rem, 3vw, 2rem);
+  font-weight: 650;
+  letter-spacing: 0;
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.65);
+}
+
+.start-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.start-tile {
+  min-height: 132px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: start;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: rgba(11, 19, 33, 0.88);
+  color: var(--text);
+  padding: 14px;
+  text-align: left;
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.28);
+}
+
+.start-tile:hover,
+.start-tile:focus-visible {
+  filter: none;
+  background: rgba(20, 31, 52, 0.94);
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.start-tile-0 {
+  color: var(--mode-web);
+}
+
+.start-tile-1 {
+  color: var(--mode-search);
+}
+
+.start-tile-2 {
+  color: var(--mode-genai);
+}
+
+.start-tile-mode {
+  color: currentColor;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.start-tile-title {
+  color: var(--text);
+  font-size: 1.05rem;
+  font-weight: 650;
+  line-height: 1.18;
+  overflow-wrap: anywhere;
+}
+
+.start-tile-value {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* PORTRAIT: THE URL BAR GETS ITS OWN LINE (Tim, on a phone, 2026-08-30).
+   In portrait the row packed Back, the URL field, Bookmarks, ?, and the VR chip
+   onto one line, and the field lost — Codex measured it at ~88px, which is a
+   placeholder and about four characters of what you typed.
+
+   The break is made by the omnibar's flex-basis rather than by an extra element:
+   Back (40px) plus the row's 8px gap plus this leaves nothing for a fifth item,
+   so `flex-wrap: wrap` on .toolbar-row carries the rest to line two by itself.
+   Landscape keeps one line — there is width for it there, and vertical space is
+   what is scarce. */
+.toolbar-break {
+  display: none;
+}
+
+@media (max-width: 760px) and (orientation: portrait) {
+  /* Everything after this starts a new line: Bookmarks, ?, VR. */
+  .toolbar-break {
+    display: block;
+    flex-basis: 100%;
+    height: 0;
+    margin: 0;
+  }
+
+  .omnibar {
+    /* Now that the break carries the rest away, the field can simply take the
+       line. min-width overrides the desktop `min(100%, 320px)`, which would
+       otherwise stop it shrinking on a narrow phone. */
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  /* The desktop trim above is a mouse affordance. A thumb needs the target
+     back. */
+  .nav-btn {
+    width: 40px;
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .nav-icon {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* PANELS THAT OPEN ON SCREEN (Tim's iPhone pass, 2026-08-29). The menus are
+     `position: absolute; right: 0` inside their picker, and on a phone that
+     picker sits near the LEFT edge of a narrow viewport — so a 380px panel hung
+     off its right edge started at x = -300 and only a sliver was reachable.
+     Re-parenting the positioning to the toolbar (which spans the viewport) lets
+     `left`/`right` clamp the panel inside the screen, while `top: 100%` still
+     resolves against the toolbar's own height — so the panel keeps clearing the
+     toolbar however many rows it has wrapped onto. Desktop is untouched. */
+  .toolbar {
+    position: relative;
+    /* The desktop scrim stays on desktop. A phone held in daylight needs the
+       contrast, and a backdrop-filter over a live WebGL canvas is the kind of
+       per-frame compositing cost a handset pays for in heat. */
+    background: linear-gradient(180deg, rgba(10, 17, 29, 0.92), rgba(10, 17, 29, 0.72));
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-bottom-color: var(--panel-border);
+  }
+
+  .bookmark-picker,
+  .shortcut-picker {
+    position: static;
+  }
+
+  .bookmark-menu,
+  .shortcuts-menu {
+    top: calc(100% + 6px);
+    left: 12px;
+    right: 12px;
+    width: auto;
+    /* A long help panel scrolls inside itself rather than running off the
+       bottom of a screen that cannot scroll (#app is a full-height grid). */
+    max-height: min(56vh, 380px);
+    overflow: auto;
+  }
+
+  /* THE MODE ICONS STAY INLINE. This used to be `grid-template-columns: 1fr`,
+     which dropped the toggle onto a second full-width row under the input; Tim
+     wants them at the END of the bar as on desktop. Only the input's floor
+     moves (180px -> 0): at 320px the bar has ~296px to give, and a 180px floor
+     plus three 42px buttons overflows into .omnibar's overflow:hidden, which
+     CLIPS the icons rather than shrinking the field. */
+  .omnibar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    /* Flex line-breaking uses flex-basis, not the resolved width, so a 360px
+       basis pushed the omnibar onto its own row the moment the 40px Back button
+       joined the line — leaving Back stranded alone above it. A small basis with
+       flex-grow: 1 keeps Back + address bar on one line at 320px and lets the
+       bar take whatever is left. min-width has to come down with it, or it
+       overrides the flex result and overflows the row. */
+    flex-basis: 200px;
+    min-width: 0;
+  }
+
+  .mode-toggle-btn {
+    /* 42px wide from the desktop rule; this is the touch-target floor. */
+    min-height: 40px;
+  }
+
+  .start-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The image-URL strip. `.results-shell` owns the chrome (border, ground) so
+   that collapsing `.results` leaves the header reading as one continuous bar
+   rather than a floating orphan. The SERVER capability hides the shell — see
+   setImageListEnabled() in ui.js; the user's collapse only hides the list. */
+.results-shell {
+  background: rgba(7, 12, 20, 0.92);
+  border-top: 1px solid var(--panel-border);
+  /* The bottom row of the app grid, so it is what sits over the home
+     indicator in portrait and over the rounded corners in landscape. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+.results-header {
+  display: flex;
+}
+
+.results-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 7px 12px;
+  min-height: 34px;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.results-toggle:hover,
+.results-toggle:focus-visible {
+  filter: none;
+  color: var(--text);
+  background: rgba(23, 34, 56, 0.7);
+}
+
+.results-chevron {
+  display: inline-block;
+  width: 10px;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.results-chevron::before {
+  content: "\25BE";
+}
+
+.results-shell.is-collapsed .results-chevron {
+  transform: rotate(-90deg);
+}
+
+.results-count {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.results {
+  max-height: 180px;
+  overflow: auto;
+  color: var(--muted);
+  padding: 0 12px 10px;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+/* CONSTANT ONCE IT HAS ANYTHING IN IT. #app is `auto 1fr auto`, so a list that
+   grows as images arrive takes its height out of the canvas row and resizes the
+   renderer mid-flight. Empty it collapses, so a fresh page is all canvas rather
+   than a reserved strip of nothing. */
+.results:not(:empty) {
+  height: 180px;
+}
+
+.results a {
+  color: var(--accent);
+}
+
+/* PHONE LANDSCAPE (Tim, 2026-08-29: "in landscape the urls at the bottom have
+   to be hidden"). Not a redesign — the image list defaults to collapsed (see
+   ui.js, still expandable) and the toolbar gives its vertical padding back to
+   the canvas, which is the whole of the artwork. */
+@media (max-width: 900px) and (orientation: landscape) {
+  .toolbar {
+    /* Longhands with the insets again: a bare `padding` shorthand here reset
+       the base rule's safe-area padding and put Back under the camera island. */
+    padding: 5px max(10px, env(safe-area-inset-right, 0px)) 5px max(10px, env(safe-area-inset-left, 0px));
+    gap: 5px;
+  }
+
+  .toolbar-row {
+    gap: 6px;
+  }
+
+  /* Text buttons only: the icon buttons keep their padding-free square box. */
+  .toolbar .secondary:not(.nav-btn) {
+    padding: 6px 10px;
+  }
+
+  .results {
+    max-height: 110px;
+  }
+
+  .results:not(:empty) {
+    height: 110px;
+  }
+}
+
+/* Settings cog button + overlay panel */
+#settings-btn {
+  min-width: 40px;
+  padding: 8px 11px;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 5vh 16px;
+  overflow-y: auto;
+  background: rgba(3, 6, 12, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.settings-dialog {
+  width: min(720px, 100%);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+  padding: 18px 20px 22px;
+  display: grid;
+  gap: 16px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.settings-close {
+  min-width: 34px;
+  padding: 6px 10px;
+  line-height: 1;
+}
+
+.settings-section {
+  border: 1px solid var(--panel-border);
+  border-radius: 9px;
+  padding: 14px 14px 16px;
+  display: grid;
+  gap: 12px;
+  background: rgba(7, 12, 20, 0.4);
+}
+
+.settings-section > h3 {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-field {
+  display: grid;
+  gap: 5px;
+}
+
+.settings-field > label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-field-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-field-row .settings-field {
+  flex: 1;
+  min-width: 130px;
+}
+
+.settings-field input[type="text"],
+.settings-field input[type="password"],
+.settings-field input[type="number"],
+.settings-field select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #2c4064;
+  background: #0b1321;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 7px 10px;
+}
+
+.settings-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+.settings-source-tag {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--panel-border);
+  color: var(--muted);
+}
+
+.settings-source-tag.source-env {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.settings-source-tag.source-override {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.settings-hint {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.settings-info-btn {
+  border: 1px solid var(--panel-border);
+  background: #18212e;
+  color: var(--accent);
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.settings-tip {
+  border: 1px solid var(--panel-border);
+  border-radius: 7px;
+  background: rgba(7, 12, 20, 0.7);
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.settings-test-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.settings-test-btn {
+  border-color: #4a5a76;
+  background: linear-gradient(180deg, #263242, #18212e);
+  padding: 6px 12px;
+  font-size: 0.85rem;
+}
+
+.settings-test-btn.stage-ok {
+  border-color: var(--ok);
+  background: linear-gradient(180deg, #1c3b2b, #12281d);
+  color: var(--ok);
+}
+
+.settings-test-btn.stage-error {
+  border-color: var(--error);
+  background: linear-gradient(180deg, #3b1c22, #281216);
+  color: var(--error);
+}
+
+.settings-test-btn.stage-running {
+  opacity: 0.7;
+}
+
+.settings-test-status {
+  color: var(--muted);
+  font-size: 0.8rem;
+  min-height: 1.2em;
+}
+
+.settings-test-status.ok {
+  color: var(--ok);
+}
+
+.settings-test-status.error {
+  color: var(--error);
+}
+
+.settings-thumbs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-thumbs img {
+  width: 84px;
+  height: 84px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border);
+  background: #0b1321;
+}
+
+.settings-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.settings-footer .settings-status {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.settings-footer .settings-status.ok {
+  color: var(--ok);
+}
+
+.settings-footer .settings-status.error {
+  color: var(--error);
+}
+
+.settings-admin-token {
+  border-top: 1px solid var(--panel-border);
+  padding-top: 12px;
+}
+
+/* The "no headset here" modal. Deliberately built out of .settings-overlay /
+   .settings-dialog so the app has ONE modal language; only the width and the
+   prose sizing are its own. */
+.vr-unavailable-overlay {
+  align-items: center;
+  padding: 6vh 16px;
+}
+
+.vr-unavailable-dialog {
+  width: min(460px, 100%);
+  gap: 12px;
+}
+
+.vr-unavailable-body {
+  display: grid;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.vr-unavailable-body p {
+  margin: 0;
+}
+
+/* three's VRButton is created only for the side effects the app needs —
+   navigator.xr.offerSession() and the session-granted listener, which are how
+   Quest Browser's own VR affordance starts the app (see scene.js). The visible
+   control is redundant with the toolbar's Enter VR button, and VRButton
+   un-hides itself asynchronously once isSessionSupported() resolves, so an
+   inline style cannot hold it down — hence !important here. */
+#VRButton {
+  display: none !important;
+}
+
+/* The language picker inside the help panel. A row rather than a select: three
+   options fit, and a native select on a phone opens a full-screen wheel for a
+   choice that should cost one tap. */
+/* First-run sphere onboarding. Sits over the canvas, low and centred so it does
+   not cover the images it is describing. */
+.sphere-onboarding {
+  position: absolute;
+  /* Centred by auto margins, NOT by left:50% + translateX(-50%). An absolutely
+     positioned box with only `left` set shrink-to-fits into the space between
+     that edge and the right edge, so left:50% capped the panel at HALF the
+     viewport — 195px on a 390px phone — and every row wrapped to four or five
+     lines (Tim, on a phone, 2026-09-01). The transform only moved the painted
+     result; the width was already lost. */
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: fit-content;
+  bottom: 8%;
+  transition: opacity 200ms ease-out;
+  /* NEVER A TARGET. It teaches a drag; eating that drag would be perverse. */
+  pointer-events: none;
+  display: grid;
+  gap: 6px;
+  padding: 14px 18px;
+  max-width: min(92vw, 460px);
+  border-radius: 12px;
+  background: rgba(7, 12, 20, 0.86);
+  border: 1px solid var(--panel-border, #23314a);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: var(--text, #e8eefc);
+  font-size: 14px;
+  line-height: 1.35;
+  z-index: 25;
+  animation: sphere-onboarding-in 320ms ease-out;
+}
+
+@keyframes sphere-onboarding-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (min-width: 640px) and (min-height: 560px) {
+  .sphere-onboarding {
+    top: 50%;
+    bottom: auto;
+    transform: translateY(-50%);
+    animation-name: sphere-onboarding-in-centred;
+  }
+}
+
+@keyframes sphere-onboarding-in-centred {
+  from { opacity: 0; transform: translateY(calc(-50% + 8px)); }
+  to   { opacity: 1; transform: translateY(-50%); }
+}
+
+/* A visitor who has asked for less movement should not be handed an animation as
+   their first experience of the piece's interface. */
+@media (prefers-reduced-motion: reduce) {
+  .sphere-onboarding {
+    animation: none;
+  }
+}
+
+.sphere-onboarding-row {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.sphere-onboarding-key {
+  color: var(--accent, #7aa2f7);
+  font-weight: 600;
+}
+
+.sphere-onboarding-more {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--panel-border, #23314a);
+  opacity: 0.75;
+  font-size: 13px;
+}

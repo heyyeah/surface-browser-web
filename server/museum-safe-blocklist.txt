@@ -1,0 +1,18 @@
+# One lowercase term per line. Keep this conservative: it is a prompt/query gate,
+# not a full moderation system.
+nsfw
+nude
+nudes
+nudity
+porn
+pornographic
+sex
+sexual
+erotic
+gore
+gory
+graphic violence
+beheading
+dismemberment
+self harm
+suicide

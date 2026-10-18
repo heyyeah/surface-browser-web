@@ -1,0 +1,32 @@
+node_modules/
+dist/
+.DS_Store
+.env
+server/settings.local.json
+server/query.log
+bakeoff-results/
+generated-images/
+screenshots/
+/.playwright-cli/
+server/xr-diag.log
+server/xr-diag.log.1
+server/xr-diag.*.log
+
+# spend guard state + operator kill switch (paths are env-overridable)
+server/spend-state.json
+server/spend-state.json.prev
+server/spend.log
+server/KILL_SWITCH
+
+# Pre-baked curated image packs. Hundreds of MB of binaries; they ship as a
+# versioned pack rsynced to the box, never through git history.
+curated/
+
+# Atomic deploys: built beside the live tree, published by symlink.
+releases/
+current
+
+# Redacted server logs pulled by deploy/fetch-logs.sh — never commit these.
+server-logs/
+server/live-stats.json
+__pycache__/

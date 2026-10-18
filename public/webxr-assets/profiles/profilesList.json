@@ -1,0 +1,17 @@
+{
+  "generic-hand": {
+    "path": "generic-hand/profile.json"
+  },
+  "meta-quest-touch-plus": {
+    "path": "meta-quest-touch-plus/profile.json"
+  },
+  "oculus-touch-v2": {
+    "path": "oculus-touch-v2/profile.json"
+  },
+  "pico-4": {
+    "path": "pico-4/profile.json"
+  },
+  "pico-4u": {
+    "path": "pico-4u/profile.json"
+  }
+}
