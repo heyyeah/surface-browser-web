@@ -46,11 +46,12 @@ import {
 import { genAiBookmarkPrompts } from "../src/bookmark-presets.js";
 
 const PORT = Number(process.env.PORT || 8788);
-// Unset binds every interface (dev: the Vite proxy and a tunnelled headset reach
-// it). In production set BIND_HOST=127.0.0.1 behind a reverse proxy: a publicly
-// reachable port lets anyone connect directly and forge X-Forwarded-For, which
-// defeats TRUST_PROXY, every per-IP limit and the localhost check.
-const BIND_HOST = (process.env.BIND_HOST || "").trim();
+// Loopback by default: the Vite proxy and an adb-reversed headset arrive there,
+// and anyone else on the network would otherwise spend the provider keys.
+// BIND_HOST=0.0.0.0 opts in to direct LAN access. Behind a reverse proxy keep it
+// loopback: a reachable port lets anyone forge X-Forwarded-For, which defeats
+// TRUST_PROXY, every per-IP limit and the localhost check.
+const BIND_HOST = (process.env.BIND_HOST || "").trim() || "127.0.0.1";
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 15000);
 const MAX_RESPONSE_BYTES = parseNonNegativeInteger(process.env.MAX_RESPONSE_BYTES, 10 * 1024 * 1024);
 const MAX_REDIRECTS = parseNonNegativeInteger(process.env.MAX_REDIRECTS, 5);
@@ -311,6 +312,7 @@ const spendGuard = createSpendGuard({
   usdPerImage: Number(process.env.GENAI_USD_PER_IMAGE || 0.003125),
   usdPerQuery: Number(process.env.SEARCH_USD_PER_QUERY || 0.001),
   persistDelayMs: parseNonNegativeInteger(process.env.SPEND_PERSIST_DELAY_MS, 2_000),
+  ipv6PrefixFactor: parseNonNegativeInteger(process.env.SPEND_IPV6_48_FACTOR, 4),
   onWarn: (message) => console.warn(message)
 });
 const killSwitch = createKillSwitch({
@@ -431,6 +433,7 @@ function currentGitBuild(now = Date.now()) {
 
 const app = express();
 app.set("trust proxy", TRUST_PROXY);
+app.use("/api", loopbackBrowserGuard);
 app.use(cors(buildCorsOptions()));
 // Ahead of every body parser, deliberately: a capture is multiple megabytes, and
 // an unauthorised caller must not make this process buffer one before being
@@ -1663,10 +1666,10 @@ app.use((err, req, res, next) => {
   res.status(code).json({ error: code < 500 ? "Bad request" : "Internal error" });
 });
 
-app.listen(...(BIND_HOST ? [PORT, BIND_HOST] : [PORT]), () => {
+app.listen(PORT, BIND_HOST, () => {
   ensureStateDirectories();
   pruneGeneratedImageFiles(Date.now(), { includeSession: true });
-  console.log(`Surface Browser MVP API listening on http://${BIND_HOST || "localhost"}:${PORT}`);
+  console.log(`Surface Browser MVP API listening on http://${BIND_HOST}:${PORT}`);
   console.log(formatStartupSettingsSummary());
   logGenAiPoolStartup();
 });
@@ -2578,24 +2581,74 @@ function parseCorsAllowedOrigins(raw) {
   );
 }
 
-// Unset CORS_ALLOWED_ORIGINS keeps `origin: true` (reflect anything), which dev,
-// the E2E suite and a same-origin deployment all want. Set, the header is sent
-// only for a listed origin; others get no CORS header and the browser refuses
-// the response. Same-origin and non-browser callers send no Origin and are
-// unaffected.
+// The header is sent only for a listed origin, or with CORS_ALLOWED_ORIGINS
+// unset for a loopback one (any port: the Vite dev server, a second local app).
+// Others get no CORS header and the browser refuses the response, and a JSON
+// request from them fails its preflight. Same-origin and non-browser callers
+// send no Origin and are unaffected.
 function buildCorsOptions() {
-  if (CORS_ALLOWED_ORIGINS.size === 0) {
-    return { origin: true };
-  }
   return {
     origin(origin, callback) {
-      if (!origin) {
-        callback(null, true);
-        return;
-      }
-      callback(null, CORS_ALLOWED_ORIGINS.has(String(origin).replace(/\/+$/, "").toLowerCase()));
+      callback(null, !origin || isAllowedOrigin(origin));
     }
   };
+}
+
+function isAllowedOrigin(origin) {
+  if (CORS_ALLOWED_ORIGINS.size > 0) {
+    return CORS_ALLOWED_ORIGINS.has(String(origin).replace(/\/+$/, "").toLowerCase());
+  }
+  return isLoopbackOrigin(origin);
+}
+
+function isLoopbackOrigin(origin) {
+  try {
+    const url = new URL(String(origin));
+    return (url.protocol === "http:" || url.protocol === "https:") && isLoopbackHostname(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function hostFromHeader(host) {
+  const value = String(host || "");
+  return value.startsWith("[") ? value.slice(1, value.indexOf("]")) : value.replace(/:\d*$/, "");
+}
+
+function isLoopbackHostname(hostname) {
+  const name = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, "");
+  return name === "localhost" || name === "127.0.0.1" || name === "::1";
+}
+
+// A browser on this machine can reach a loopback port on behalf of any page it
+// has open. CORS hides responses but not the request: a simple GET or text/plain
+// POST still runs (spending provider keys, or using the loopback authority of
+// isLocalRequest), and a DNS-rebound page is same-origin to us. So a request
+// arriving over loopback must name a loopback Host, and must not come from a
+// foreign page. Requests a reverse proxy forwards carry the visitor's address
+// (TRUST_PROXY) and are not judged here.
+function loopbackBrowserGuard(req, res, next) {
+  if (!isLoopbackAddress(req.ip || req.socket?.remoteAddress)) {
+    next();
+    return;
+  }
+  // The raw Host header: req.hostname honours X-Forwarded-Host under trust
+  // proxy, and a rebound page is same-origin, so it may set that header.
+  if (!isLoopbackHostname(hostFromHeader(req.get("host")))) {
+    res.status(403).json({ error: "Forbidden: loopback requests must use a localhost Host (behind a proxy, set TRUST_PROXY)" });
+    return;
+  }
+  const origin = req.get("origin");
+  // No Origin (a no-cors GET such as <img>): Sec-Fetch-Site still names a
+  // foreign page. Same-site covers localhost:5173 -> localhost:8788.
+  const foreign = origin === undefined
+    ? req.get("sec-fetch-site") === "cross-site"
+    : !isLoopbackOrigin(origin) && !isAllowedOrigin(origin);
+  if (foreign) {
+    res.status(403).json({ error: "Forbidden: cross-site request" });
+    return;
+  }
+  next();
 }
 
 // Every configurable path may be a file: URL (the in-checkout default) or an

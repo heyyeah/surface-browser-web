@@ -736,7 +736,8 @@ test("the review routes 404 for a non-local request, under both TRUST_PROXY sett
   for (const trustProxy of ["", "1"]) {
     await withPoolServer({
       GENAI_POOL_SUPPRESS_FILE: suppressionStorePath(),
-      TRUST_PROXY: trustProxy
+      TRUST_PROXY: trustProxy,
+      BIND_HOST: "0.0.0.0"
     }, async ({ server }) => {
       for (const route of routes) {
         assert.equal((await fetch(`${server.base}${route}`)).status, 200, `${route} from loopback, TRUST_PROXY=${trustProxy || "unset"}`);

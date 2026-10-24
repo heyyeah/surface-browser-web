@@ -7,8 +7,10 @@ function resolveAllowedHosts(env) {
   if (list.length > 0) {
     return list;
   }
-  // Default for local + ngrok/dev tunneling workflows.
-  return true;
+  // Vite always admits localhost and IP addresses (a LAN headset). Any other
+  // Host is a DNS-rebound page or a tunnel, so only ngrok's are admitted by
+  // default; list your own tunnel's host in VITE_ALLOWED_HOSTS.
+  return [".ngrok-free.app", ".ngrok.app", ".ngrok-free.dev", ".ngrok.dev", ".ngrok.io"];
 }
 
 // The dev server's root is clients/browser, which also holds the API's settings
@@ -35,7 +37,7 @@ export default defineConfig(({ mode }) => {
   // The dev server proxies /api to the Express backend. Default to the local
   // dev backend, but let VITE_API_TARGET override it so the headless E2E harness
   // can point a live page at an ephemeral test server (see scripts/*.test.mjs).
-  const apiTarget = process.env.VITE_API_TARGET || env.VITE_API_TARGET || "http://localhost:8788";
+  const apiTarget = process.env.VITE_API_TARGET || env.VITE_API_TARGET || "http://127.0.0.1:8788";
 
   return {
     define: {
@@ -57,6 +59,16 @@ export default defineConfig(({ mode }) => {
           configure: (proxy) => {
             proxy.on("proxyReq", (proxyReq, req) => {
               proxyReq.setHeader("x-surface-dev-client", req.socket?.remoteAddress || "unknown");
+              // A page Vite served itself (allowedHosts vetted its Host): drop
+              // its Origin so a LAN or tunnel address does not trip the API's
+              // cross-site guard. Foreign pages keep theirs and are refused.
+              try {
+                if (req.headers.origin && new URL(req.headers.origin).host === req.headers.host) {
+                  proxyReq.removeHeader("origin");
+                }
+              } catch {
+                // Unparseable Origin: forwarded as is, and refused.
+              }
             });
           }
         }

@@ -28,6 +28,7 @@ const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 // into a test (dotenv skips keys already present in the environment).
 const CLEAN = {
   SERVE_STATIC_DIR: "",
+  BIND_HOST: "",
   TRUST_PROXY: "",
   CORS_ALLOWED_ORIGINS: "",
   XR_DIAG_ENABLED: "",
@@ -131,12 +132,99 @@ test("malformed JSON gets a JSON 400, not Express's stack-trace page", async () 
   }
 });
 
-test("CORS_ALLOWED_ORIGINS unset: any origin is reflected (dev default)", async () => {
+// Raw http so the Host header can be set (fetch treats it as forbidden).
+function rawGet(port, pathname, headers) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: "127.0.0.1", port, path: pathname, headers }, (res) => {
+      res.resume();
+      res.on("end", () => resolve({ status: res.statusCode, headers: res.headers }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+test("CORS_ALLOWED_ORIGINS unset: only loopback origins are reflected (dev default)", async () => {
   const server = await startServer({ ...CLEAN });
   try {
-    const res = await fetch(`${server.base}/api/health`, { headers: { origin: "https://evil.test" } });
-    assert.equal(res.status, 200);
-    assert.equal(res.headers.get("access-control-allow-origin"), "https://evil.test");
+    const local = await fetch(`${server.base}/api/health`, { headers: { origin: "http://localhost:5173" } });
+    assert.equal(local.status, 200);
+    assert.equal(local.headers.get("access-control-allow-origin"), "http://localhost:5173");
+
+    const foreign = await fetch(`${server.base}/api/health`, { headers: { origin: "https://evil.test" } });
+    assert.equal(foreign.headers.get("access-control-allow-origin"), null);
+  } finally {
+    await server.stop();
+  }
+});
+
+test("BIND_HOST unset: the API is not reachable from the network", async (t) => {
+  const lan = Object.values(os.networkInterfaces())
+    .flat()
+    .find((entry) => entry?.family === "IPv4" && !entry.internal)?.address;
+  if (!lan) {
+    t.skip("no LAN address");
+    return;
+  }
+  const server = await startServer({ ...CLEAN });
+  try {
+    assert.equal((await fetch(`${server.base}/api/health`)).status, 200);
+    const remote = await fetch(`http://${lan}:${server.port}/api/health`).catch((err) => err);
+    assert.ok(!(remote instanceof Response), `reachable on ${lan}`);
+  } finally {
+    await server.stop();
+  }
+});
+
+test("loopback guard: a foreign page cannot use the local API through the developer's browser", async () => {
+  const server = await startServer({ ...CLEAN });
+  try {
+    // A simple request needs no preflight, so CORS alone would let it run.
+    const foreignOrigin = await fetch(`${server.base}/api/settings`, {
+      method: "POST",
+      headers: { origin: "https://evil.test", "content-type": "text/plain" },
+      body: "{}"
+    });
+    assert.equal(foreignOrigin.status, 403);
+
+    // <img src> from a foreign page: no Origin, but Sec-Fetch-Site says so.
+    const imgTag = await fetch(`${server.base}/api/health`, { headers: { "sec-fetch-site": "cross-site" } });
+    assert.equal(imgTag.status, 403);
+    const sameSite = await fetch(`${server.base}/api/health`, { headers: { "sec-fetch-site": "same-site" } });
+    assert.equal(sameSite.status, 200);
+
+    // DNS rebinding: same-origin to the page, so only the Host gives it away.
+    const rebound = await rawGet(server.port, "/api/health", { host: "evil.test:8788" });
+    assert.equal(rebound.status, 403);
+    for (const host of [`localhost:${server.port}`, `127.0.0.1:${server.port}`, `[::1]:${server.port}`]) {
+      assert.equal((await rawGet(server.port, "/api/health", { host })).status, 200, host);
+    }
+  } finally {
+    await server.stop();
+  }
+});
+
+test("loopback guard: proxied visitors are not judged by Host, the tunnelled operator still is", async () => {
+  const server = await startServer({ ...CLEAN, TRUST_PROXY: "1", CORS_ALLOWED_ORIGINS: "https://vr.example.org" });
+  try {
+    const visitor = await rawGet(server.port, "/api/health", {
+      host: "vr.example.org",
+      "x-forwarded-for": "203.0.113.9",
+      origin: "https://vr.example.org"
+    });
+    assert.equal(visitor.status, 200);
+    // An SSH tunnel arrives from loopback without X-Forwarded-For: the
+    // operator's localhost page passes, a rebound one does not.
+    const operator = await rawGet(server.port, "/api/health", {
+      host: "localhost:9999",
+      origin: "http://localhost:9999"
+    });
+    assert.equal(operator.status, 200);
+    const rebound = await rawGet(server.port, "/api/health", {
+      host: "evil.test:9999",
+      "x-forwarded-host": "localhost"
+    });
+    assert.equal(rebound.status, 403);
   } finally {
     await server.stop();
   }
@@ -161,9 +249,9 @@ test("CORS_ALLOWED_ORIGINS set: only listed origins get the header", async () =>
     const blocked = await fetch(`${server.base}/api/health`, {
       headers: { origin: "https://evil.test" }
     });
-    // The request still answers (CORS is enforced in the browser), but without
-    // the header the browser refuses to hand the body to the calling page.
-    assert.equal(blocked.status, 200);
+    // Over loopback a foreign origin is refused outright (the loopback guard);
+    // a proxied visitor would get the answer without the header.
+    assert.equal(blocked.status, 403);
     assert.equal(blocked.headers.get("access-control-allow-origin"), null);
 
     // Same-origin / non-browser callers send no Origin and must be unaffected.

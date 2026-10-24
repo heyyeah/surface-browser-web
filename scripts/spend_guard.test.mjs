@@ -437,3 +437,43 @@ test("unparseable clients share one bucket rather than each getting a free one",
     assert.equal(spendClientKey(bad), "unknown");
   }
 });
+
+test("one IPv6 /48 cannot drain the day by rotating /64s", () => {
+  const guard = createSpendGuard({ caps: { genaiDaily: 1000, genaiDailyPerIp: 4 }, ipv6PrefixFactor: 2 });
+  assert.equal(guard.reserve("genai", { key: spendClientKey("2001:db8:a:1::1"), amount: 4 }).ok, true);
+  assert.equal(guard.reserve("genai", { key: spendClientKey("2001:db8:a:2::1"), amount: 4 }).ok, true);
+  const refused = guard.reserve("genai", { key: spendClientKey("2001:db8:a:3::1"), amount: 1 });
+  assert.equal(refused.ok, false, "a fresh /64 in a spent /48 is refused");
+  assert.equal(refused.reason, "ip");
+  assert.equal(guard.reserve("genai", { key: spendClientKey("2001:db8:b:1::1"), amount: 4 }).ok, true, "another /48 is unaffected");
+  assert.equal(guard.reserve("genai", { key: "198.51.100.7", amount: 4 }).ok, true, "IPv4 has no prefix bucket");
+});
+
+test("a release refunds the /48 as well, and factor 0 turns the /48 limit off", () => {
+  const guard = createSpendGuard({ caps: { genaiDaily: 1000, genaiDailyPerIp: 4 }, ipv6PrefixFactor: 1 });
+  const first = guard.reserve("genai", { key: spendClientKey("2001:db8:a:1::1"), amount: 4 });
+  assert.equal(guard.reserve("genai", { key: spendClientKey("2001:db8:a:2::1"), amount: 1 }).ok, false);
+  guard.release(first, 3);
+  assert.equal(guard.reserve("genai", { key: spendClientKey("2001:db8:a:2::1"), amount: 3 }).ok, true);
+
+  const off = createSpendGuard({ caps: { genaiDaily: 1000, genaiDailyPerIp: 4 }, ipv6PrefixFactor: 0 });
+  for (let i = 1; i <= 5; i += 1) {
+    assert.equal(off.reserve("genai", { key: spendClientKey(`2001:db8:a:${i}::1`), amount: 4 }).ok, true);
+  }
+});
+
+test("/48 counters survive a restart", () => {
+  const dir = tempDir();
+  const statePath = path.join(dir, "spend-state.json");
+  const clock = fixedClock(DAY_START);
+  const options = { caps: { genaiDaily: 1000, genaiDailyPerIp: 4 }, ipv6PrefixFactor: 1, statePath, now: clock.now };
+  try {
+    const first = createSpendGuard(options);
+    assert.equal(first.reserve("genai", { key: spendClientKey("2001:db8:a:1::1"), amount: 4 }).ok, true);
+    first.shutdown();
+    const second = createSpendGuard(options);
+    assert.equal(second.reserve("genai", { key: spendClientKey("2001:db8:a:2::1"), amount: 1 }).ok, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

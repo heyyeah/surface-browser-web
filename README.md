@@ -45,14 +45,16 @@ ngrok http 5173
 ```
 
 Open the HTTPS address in the headset's browser and press **Enter VR**. Press `?`
-on the page, or the Help button in VR, for the controls.
+on the page, or the Help button in VR, for the controls. A tunnel other than
+ngrok needs its hostname in `VITE_ALLOWED_HOSTS`. Anyone with the tunnel address
+can use your provider keys while it is open.
 
 ## Hosting it
 
 `npm run build` writes the static site to `dist/`. Serve that and proxy
 `/api/*` to `node server/index.js`, on one origin. Before putting it on the
 open internet, read the "Hardening for a public host" section of
-`.env.example`: by default the server trusts its local network.
+`.env.example`: by default the server trusts requests from its own machine.
 
 ## Tests
 

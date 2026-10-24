@@ -89,6 +89,13 @@ export function spendClientKey(address) {
   return "unknown";
 }
 
+// The /48 an IPv6 /64 key belongs to, or "" for IPv4 and "unknown". One site or
+// cloud tenant commonly holds a /48, i.e. 65536 /64 buckets.
+function ipv6PrefixKey(key) {
+  const match = /^([0-9a-f]+:[0-9a-f]+:[0-9a-f]+):[0-9a-f]+::\/64$/.exec(key);
+  return match ? `${match[1]}::/48` : "";
+}
+
 export function createSpendGuard({
   caps = {},
   statePath = null,
@@ -100,6 +107,9 @@ export function createSpendGuard({
   // flood cannot leak memory. Past the cap, newcomers are charged to the global
   // counter only, which still bounds the money.
   ipTrackingMax = 10_000,
+  // Each IPv6 /48 may spend this many per-IP caps a day across all its /64s.
+  // Without it, ~38 /64s from one /48 drain the whole GenAI day. 0 = off.
+  ipv6PrefixFactor = 4,
   now = () => Date.now(),
   enabled = null,
   onWarn = () => {}
@@ -114,6 +124,7 @@ export function createSpendGuard({
       ip: normalizeCap(caps.searchDailyPerIp)
     }
   };
+  const prefixFactor = Math.max(0, Math.floor(Number(ipv6PrefixFactor) || 0));
   const anyCap = SCOPES.some((scope) => limits[scope].global > 0 || limits[scope].ip > 0);
   const active = enabled === null ? anyCap : Boolean(enabled);
 
@@ -157,7 +168,7 @@ export function createSpendGuard({
 
   function bucketFor(scope) {
     if (!state.scopes[scope]) {
-      state.scopes[scope] = { total: 0, ips: new Map() };
+      state.scopes[scope] = { total: 0, ips: new Map(), prefixes: new Map() };
     }
     return state.scopes[scope];
   }
@@ -187,16 +198,28 @@ export function createSpendGuard({
         return { ok: false, reason: "ip", scope, amount: 0, key: ipKey, day: state.day };
       }
     }
+    const prefixLimit = limit.ip * prefixFactor;
+    const prefixCandidate = prefixLimit > 0 ? ipv6PrefixKey(ipKey) : "";
+    const prefixKey = prefixCandidate && (bucket.prefixes.has(prefixCandidate) || bucket.prefixes.size < ipTrackingMax)
+      ? prefixCandidate
+      : "";
+    if (prefixKey && (bucket.prefixes.get(prefixKey) || 0) + units > prefixLimit) {
+      // Same scope as the per-IP refusal: to the visitor it is their network's limit.
+      return { ok: false, reason: "ip", scope, amount: 0, key: ipKey, day: state.day };
+    }
 
     bucket.total += units;
     if (tracked) {
       bucket.ips.set(ipKey, (bucket.ips.get(ipKey) || 0) + units);
     }
+    if (prefixKey) {
+      bucket.prefixes.set(prefixKey, (bucket.prefixes.get(prefixKey) || 0) + units);
+    }
     dirty = true;
     schedulePersist();
     // The day is part of the receipt: a reservation taken at 23:59 must not be
     // refunded out of tomorrow's budget.
-    return { ok: true, scope, amount: units, key: tracked ? ipKey : "", day: state.day };
+    return { ok: true, scope, amount: units, key: tracked ? ipKey : "", prefixKey, day: state.day };
   }
 
   // Give back what the provider never delivered. `amount` defaults to the whole
@@ -219,12 +242,14 @@ export function createSpendGuard({
     }
     const bucket = bucketFor(reservation.scope);
     bucket.total = Math.max(0, bucket.total - units);
-    if (reservation.key && bucket.ips.has(reservation.key)) {
-      const next = Math.max(0, (bucket.ips.get(reservation.key) || 0) - units);
-      if (next === 0) {
-        bucket.ips.delete(reservation.key);
-      } else {
-        bucket.ips.set(reservation.key, next);
+    for (const [map, key] of [[bucket.ips, reservation.key], [bucket.prefixes, reservation.prefixKey]]) {
+      if (key && map.has(key)) {
+        const next = Math.max(0, (map.get(key) || 0) - units);
+        if (next === 0) {
+          map.delete(key);
+        } else {
+          map.set(key, next);
+        }
       }
     }
     dirty = true;
@@ -351,8 +376,8 @@ function emptyState(day) {
     day,
     corrupt: false,
     scopes: {
-      genai: { total: 0, ips: new Map() },
-      search: { total: 0, ips: new Map() }
+      genai: { total: 0, ips: new Map(), prefixes: new Map() },
+      search: { total: 0, ips: new Map(), prefixes: new Map() }
     }
   };
 }
@@ -369,10 +394,11 @@ function exhaustedState(day) {
 function serializeState(state) {
   const scopes = {};
   for (const scope of SCOPES) {
-    const bucket = state.scopes[scope] || { total: 0, ips: new Map() };
+    const bucket = state.scopes[scope] || { total: 0, ips: new Map(), prefixes: new Map() };
     scopes[scope] = {
       total: bucket.total,
-      ips: Object.fromEntries(bucket.ips)
+      ips: Object.fromEntries(bucket.ips),
+      prefixes: Object.fromEntries(bucket.prefixes || [])
     };
   }
   // `corrupt` round-trips deliberately: if this state is persisted (e.g. on
@@ -426,10 +452,12 @@ function tryReadStateFile(filePath) {
         continue;
       }
       state.scopes[scope].total = Math.max(0, Math.floor(Number(bucket.total) || 0));
-      for (const [key, value] of Object.entries(bucket.ips || {})) {
-        const count = Math.max(0, Math.floor(Number(value) || 0));
-        if (count > 0) {
-          state.scopes[scope].ips.set(key, count);
+      for (const field of ["ips", "prefixes"]) {
+        for (const [key, value] of Object.entries(bucket[field] || {})) {
+          const count = Math.max(0, Math.floor(Number(value) || 0));
+          if (count > 0) {
+            state.scopes[scope][field].set(key, count);
+          }
         }
       }
     }
