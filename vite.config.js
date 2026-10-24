@@ -58,7 +58,14 @@ export default defineConfig(({ mode }) => {
           // tunnel visitor is not (isLocalRequest in server/index.js).
           configure: (proxy) => {
             proxy.on("proxyReq", (proxyReq, req) => {
-              proxyReq.setHeader("x-surface-dev-client", req.socket?.remoteAddress || "unknown");
+              // A tunnel (ngrok, cloudflared) also arrives from loopback, so its
+              // visitors would count as the operator: name the address it
+              // forwarded, the last entry (earlier ones are the visitor's own
+              // claim). Only from loopback, or a LAN client could claim 127.0.0.1.
+              const socketAddress = req.socket?.remoteAddress || "unknown";
+              const forwarded = String(req.headers["x-forwarded-for"] || "").split(",").map((v) => v.trim()).filter(Boolean);
+              const viaTunnel = /^(::ffff:)?127\.0\.0\.1$|^::1$/.test(socketAddress) && forwarded.length > 0;
+              proxyReq.setHeader("x-surface-dev-client", viaTunnel ? forwarded.at(-1) : socketAddress);
               // A page Vite served itself (allowedHosts vetted its Host): drop
               // its Origin so a LAN or tunnel address does not trip the API's
               // cross-site guard. Foreign pages keep theirs and are refused.
