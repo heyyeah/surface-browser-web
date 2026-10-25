@@ -275,6 +275,9 @@ const SVG_RENDER_WORKER = fileURLToPath(new URL("./svg-render-worker.js", import
 const SVG_MAX_DENSITY = 72 * 16;
 // Icon libraries draw at 16-24 units; a page's real SVG artwork is larger.
 export const SVG_MIN_EDGE_PX = 32;
+// A raster this small is a tracking pixel, a spacer or a blur-up preview; the
+// tunnel would stretch it into a smear. The client skips a refused image.
+export const RASTER_MIN_EDGE_PX = 48;
 
 export function looksLikeSvg(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length < 5) {

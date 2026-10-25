@@ -309,7 +309,7 @@ test("the overlay holds the sphere's dwell, through its own flag", () => {
   const transitions = read("src/transitions.js");
   assert.match(
     stripComments(transitions),
-    /if \(!state\.sphereInteractionHold && !state\.sphereDwellHeldByOnboarding && !idle\.suspended\) \{\s*\n\s*state\.sphereDwellSeconds \+= dt;/,
+    /if \(!state\.sphereInteractionHold && !state\.sphereDwellHeldByOnboarding && !isSettingsOpen\(\) && !idle\.suspended\) \{\s*\n\s*state\.sphereDwellSeconds \+= dt;/,
     "the dwell clock consults the overlay's hold"
   );
 });

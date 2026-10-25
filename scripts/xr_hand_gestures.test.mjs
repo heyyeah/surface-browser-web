@@ -917,7 +917,7 @@ test("the dwell clock is HELD, not merely reset, while a gesture is engaged", ()
   // overlay, and none can be dropped to satisfy another.
   assert.match(
     transitions,
-    /if \(!state\.sphereInteractionHold && !state\.sphereDwellHeldByOnboarding && !idle\.suspended\) \{\s*\n\s*state\.sphereDwellSeconds \+= dt;\s*\n\s*\}/,
+    /if \(!state\.sphereInteractionHold && !state\.sphereDwellHeldByOnboarding && !isSettingsOpen\(\) && !idle\.suspended\) \{\s*\n\s*state\.sphereDwellSeconds \+= dt;\s*\n\s*\}/,
     "the clock does not advance at all while a gesture is engaged"
   );
 

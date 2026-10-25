@@ -4,8 +4,10 @@
 // A visitor is the random id the client makes per page load (x-session-id), so
 // a reload is a new visitor. No address is kept: the caller passes a country
 // code, and sessions live only in memory, gone SESSION_FORGET_MS after their
-// last request. Only the per-day counts are written to disk, and they hold
-// numbers, country codes and device kinds, nothing about a person.
+// last request. The per-day counts on disk hold numbers, country codes, device
+// kinds and referring sites. With a query log path set, each visitor event
+// (page, search, prompt) is also kept for `queryLogDays`, with the visitor's
+// country and device but no address.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -16,6 +18,8 @@ const MAX_SESSIONS = 500;
 const MAX_EVENTS_PER_SESSION = 60;
 const SESSION_ID = /^[A-Za-z0-9_-]{6,64}$/;
 const MAX_TEXT = 300;
+const MAX_REFERRER = 100;
+const QUERY_LOG_PRUNE_MS = 60 * 60 * 1000;
 // New visitors one address may start per hour. Ids are the client's to invent,
 // so without this one script could inflate the counts and push real visitors
 // out of MAX_SESSIONS. A venue sharing one IP may need it raised.
@@ -63,11 +67,19 @@ function utcDay(ms) {
 }
 
 function emptyDay() {
-  return { ...Object.fromEntries(COUNTER_NAMES.map((name) => [name, 0])), countries: {}, devices: {} };
+  return { ...Object.fromEntries(COUNTER_NAMES.map((name) => [name, 0])), countries: {}, devices: {}, referrers: {} };
+}
+
+// The client sends document.referrer's host, and only when it is another site.
+export function parseReferrer(raw) {
+  const host = String(raw || "").trim().toLowerCase().replace(/^www\./, "");
+  return /^[a-z0-9.-]{1,100}$/.test(host) && host.includes(".") ? host.slice(0, MAX_REFERRER) : "";
 }
 
 export function createLiveMonitor({
   statsPath = "",
+  queryLogPath = "",
+  queryLogDays = 0,
   now = Date.now,
   onWarn = console.warn,
   newSessionsPerClientPerHour = NEW_SESSIONS_PER_CLIENT_PER_HOUR
@@ -190,12 +202,13 @@ export function createLiveMonitor({
       if (!allowNewSession(client)) {
         return null;
       }
-      const { country = "", device = "" } = describeNew();
-      session = { id, firstSeen: now(), lastSeen: now(), country, device, requests: 0, events: [] };
+      const { country = "", device = "", referrer = "" } = describeNew();
+      session = { id, firstSeen: now(), lastSeen: now(), country, device, referrer, requests: 0, events: [] };
       count("visits");
       const day = today();
       tally(day, "countries", country || "??");
       tally(day, "devices", device || "unknown");
+      tally(day, "referrers", referrer || "direct");
     } else {
       sessions.delete(id);
     }
@@ -212,10 +225,69 @@ export function createLiveMonitor({
       return;
     }
     const text = String(event.text ?? "");
-    session.events.push({ at: now(), ...event, text: text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}…` : text });
+    const entry = { at: now(), ...event, text: text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}…` : text };
+    session.events.push(entry);
     if (session.events.length > MAX_EVENTS_PER_SESSION) {
       session.events.shift();
     }
+    logQuery({ ...entry, visitor: session.id.slice(0, 6), country: session.country, device: session.device, referrer: session.referrer });
+  }
+
+  let lastPrune = 0;
+  function logQuery(entry) {
+    if (!queryLogPath || !(queryLogDays > 0)) {
+      return;
+    }
+    try {
+      fs.mkdirSync(path.dirname(queryLogPath), { recursive: true });
+      fs.appendFileSync(queryLogPath, `${JSON.stringify(entry)}\n`);
+    } catch (err) {
+      onWarn(`Could not write query log: ${err.message}`);
+    }
+    if (now() - lastPrune > QUERY_LOG_PRUNE_MS) {
+      pruneQueries();
+    }
+  }
+
+  function readQueries() {
+    try {
+      return fs.readFileSync(queryLogPath, "utf8").split("\n").filter(Boolean).flatMap((line) => {
+        try {
+          return [JSON.parse(line)];
+        } catch {
+          return [];
+        }
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  // Rewrites the file without entries past the retention, at most hourly.
+  function pruneQueries() {
+    lastPrune = now();
+    const cutoff = now() - queryLogDays * 86_400_000;
+    const all = readQueries();
+    const kept = all.filter((entry) => entry.at >= cutoff);
+    if (kept.length === all.length) {
+      return;
+    }
+    const tmp = `${queryLogPath}.${process.pid}.tmp`;
+    try {
+      fs.writeFileSync(tmp, kept.map((entry) => `${JSON.stringify(entry)}\n`).join(""));
+      fs.renameSync(tmp, queryLogPath);
+    } catch (err) {
+      fs.rmSync(tmp, { force: true });
+      onWarn(`Could not prune query log: ${err.message}`);
+    }
+  }
+
+  // Newest first.
+  function queries(sinceMs, limit = 2000) {
+    if (!queryLogPath || !(queryLogDays > 0)) {
+      return null;
+    }
+    return readQueries().filter((entry) => entry.at >= sinceMs).reverse().slice(0, limit);
   }
 
   function totals() {
@@ -224,7 +296,7 @@ export function createLiveMonitor({
       for (const name of COUNTER_NAMES) {
         sum[name] += Number(day[name]) || 0;
       }
-      for (const table of ["countries", "devices"]) {
+      for (const table of ["countries", "devices", "referrers"]) {
         for (const [key, visits] of Object.entries(day[table] || {})) {
           tally(sum, table, key, visits);
         }
@@ -254,7 +326,7 @@ export function createLiveMonitor({
     };
   }
 
-  return { touch, addEvent, count, setToday, syncPaidImages, snapshot, flush };
+  return { touch, addEvent, count, setToday, syncPaidImages, snapshot, flush, queries, queryLogDays };
 }
 
 // Turns a query-log event into one line of a visitor's trail, or null for the
@@ -286,7 +358,8 @@ export function describeEvent(type, details = {}) {
       return {
         kind: details.mode === "vary" ? "vary" : "ai",
         text: details.prompt,
-        note: type === "genai.cached" ? "cached" : type === "genai.pooled" ? "from pool" : ""
+        note: type === "genai.cached" ? "cached" : type === "genai.pooled" ? "from pool" : "",
+        ...(details.bookmark ? { bookmark: true } : {})
       };
     case "genai.failed":
     case "genai.budget":

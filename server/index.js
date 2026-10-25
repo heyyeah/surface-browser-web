@@ -11,6 +11,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { load as loadHtml } from "cheerio";
 import { setupStt, isSttEnabled } from "./stt.js";
+import { isEditModel, recommendedSteps, recommendedStepsSummary } from "./model-profiles.js";
+import { PLACEHOLDER_IMAGE_NAME, TINY_DECLARED_EDGE_PX, declaredImageEdge, isPlaceholderImageUrl, isStandInImageSource } from "./image-url-filters.js";
 import {
   detectRasterImage,
   looksLikeSvg,
@@ -21,14 +23,15 @@ import {
   inspectImportedRasterImage,
   normalizeImportedRasterImage,
   PROXY_IMAGE_MAX_EDGE_PX,
+  RASTER_MIN_EDGE_PX,
   resizeRasterImageToSize
 } from "./images.js";
 import { createImageDiskCache } from "./image-cache.js";
 import { createGenAiPromptCache } from "./genai-prompt-cache.js";
-import { createLiveMonitor, describeEvent, deviceFromUserAgent, parseSessionId } from "./live-monitor.js";
+import { createLiveMonitor, describeEvent, deviceFromUserAgent, parseReferrer, parseSessionId } from "./live-monitor.js";
 import { Reader as MmdbReader } from "mmdb-lib";
-import { splitVaryModifierEntries } from "./vary-modifiers.js";
-import { buildPoolKey, drawPoolIndexes, planPoolDraw, planPoolFallback, poolSourceAddress } from "./genai-pool.js";
+import { parseVaryModifierTexts, splitVaryModifierEntries } from "../shared/vary-modifiers.js";
+import { buildPoolKey, drawPoolIndexes, normalizeText, planPoolDraw, planPoolFallback, poolSourceAddress } from "./genai-pool.js";
 import { createInFlightRequests } from "./in-flight.js";
 import { applyPoolSuppression, loadPoolPack, mergePools, poolMemberCount, readPoolMember } from "./genai-pool-pack.js";
 import { addGrownMember, bookmarkPromptSet, loadGrowStore, poolGrowthRound } from "./genai-pool-grow.js";
@@ -168,8 +171,12 @@ function releaseRenderSlot() {
   }
 }
 // /admin/live. Per-day counts persist here; visitors are memory only.
+// QUERY_LOG_DAYS keeps each page, search and prompt for /admin/queries; the
+// privacy text promises at most 7.
 const liveMonitor = createLiveMonitor({
-  statsPath: resolveFilePath(process.env.LIVE_STATS_PATH || new URL("./live-stats.json", import.meta.url))
+  statsPath: resolveFilePath(process.env.LIVE_STATS_PATH || new URL("./live-stats.json", import.meta.url)),
+  queryLogPath: resolveFilePath(process.env.QUERY_LOG_PATH || new URL("./queries.jsonl", import.meta.url)),
+  queryLogDays: Math.min(7, parseNonNegativeInteger(process.env.QUERY_LOG_DAYS, 3))
 });
 const liveSessionContext = new AsyncLocalStorage();
 // An mmdb country database (DB-IP "IP to Country Lite", CC BY 4.0). Unset or
@@ -225,13 +232,22 @@ const GENAI_POOL_DIR = process.env.GENAI_POOL_DIR ? path.resolve(process.env.GEN
 const GENAI_POOL_FRESH_MIN = parseNonNegativeInteger(process.env.GENAI_POOL_FRESH_MIN, 1);
 const GENAI_POOL_FRESH_MAX = parseNonNegativeInteger(process.env.GENAI_POOL_FRESH_MAX, 2);
 // The writable half of the pool (server/genai-pool-grow.js): fresh images from
-// GenAI bookmarks, rounds 1 and 2, kept and drawn like baked ones. Unset =
+// GenAI bookmark lineages (up to GENAI_POOL_GROW_MAX_ROUND), kept and drawn like baked ones. Unset =
 // nothing is kept. Works with or without GENAI_POOL_DIR. Unlike the pack, this
 // directory must be owned by the service user.
 const GENAI_POOL_GROW_DIR = process.env.GENAI_POOL_GROW_DIR ? path.resolve(process.env.GENAI_POOL_GROW_DIR) : "";
 // Drawable members per key before a key stops growing. 8: a batch draws at most
 // GENAI_COUNT (5) from one key, so repeat visits rarely replay the same sphere.
 const GENAI_POOL_GROW_MAX_PER_KEY = parseNonNegativeInteger(process.env.GENAI_POOL_GROW_MAX_PER_KEY, 8);
+// Images a day that grow the pool are charged to one shared bucket of this size
+// instead of the visitor's per-IP cap. Round 2 keys are base × emoji, so the
+// per-key cap alone does not bound the money; this does. The global cap still
+// applies. 0 = growth is charged to the visitor like any other request.
+const GENAI_POOL_GROW_DAILY_CAP = parseNonNegativeInteger(process.env.GENAI_POOL_GROW_DAILY_CAP, 300);
+const POOL_GROW_SPEND_KEY = "pool-grow";
+// Generations of a bookmark lineage that are kept: 1 is the bookmark's own
+// images, 2 their variations, and so on.
+const GENAI_POOL_GROW_MAX_ROUND = parseNonNegativeInteger(process.env.GENAI_POOL_GROW_MAX_ROUND, 4);
 // Where the review page's deletions are recorded. Default: a SIBLING of the
 // pack, "<pack dir>.suppressed.json" — outside the release, so push-curated.sh
 // neither refuses to write because of it nor overwrites it. Point several
@@ -380,6 +396,7 @@ const SETTING_DEFINITIONS = Object.freeze({
   GENAI_IMAGE_RETENTION_DAYS: { defaultValue: 0, type: "integer", min: 0, max: 3650 },
   GENAI_MUSEUM_SAFE: { defaultValue: false, type: "boolean" },
   GENAI_STEPS: { defaultValue: 8, type: "optionalInteger", min: 1, max: 150 },
+  GENAI_STEPS_RECOMMENDED: { defaultValue: false, type: "boolean" },
   GENAI_CFG_SCALE: { defaultValue: "", type: "optionalNumber", min: 0.1, max: 30 },
   GENAI_DRAWTHINGS_GUIDANCE_EMBED: { defaultValue: 5, type: "optionalNumber", min: 0.1, max: 30 },
   GENAI_VARIATION_STRENGTH_MIN: { defaultValue: 0.95, type: "number", min: 0, max: 1 },
@@ -389,6 +406,10 @@ const SETTING_DEFINITIONS = Object.freeze({
   GENAI_VARY_MODIFIER_MODE: { defaultValue: "per-image", type: "genAiVaryModifierMode" },
   GENAI_VARY_MODIFIER_STYLE: { defaultValue: "replace", type: "genAiVaryModifierStyle" },
   GENAI_VARY_MODIFIER_PAYLOAD: { defaultValue: "text", type: "genAiVaryModifierPayload" },
+  // Emoji texts over the built-in ones: "🦦 otter, wet fur" per line (or ";").
+  GENAI_VARY_MODIFIER_TEXTS: { defaultValue: "", type: "string" },
+  // Append style (fal Klein): how many of the newest stack emoji go in the sent prompt.
+  GENAI_VARY_PROMPT_EMOJI: { defaultValue: 2, type: "integer", min: 1, max: 6 },
   // Milliseconds of no client-side input after which the sphere's dwell
   // auto-advance suspends. Inside a GenAI sphere every auto-advance is a paid
   // batch, so a forgotten tab would generate until the daily cap. 0 disables the
@@ -721,6 +742,11 @@ app.get("/api/proxy/image", holdSlotUntilSettled(async (req, res) => {
       res.status(415).json({ error: "Unsupported image format" });
       return;
     }
+    if (Math.max(detected.width, detected.height) < RASTER_MIN_EDGE_PX) {
+      logApiQuery("proxyImage.refused", { url: imageUrl, upstreamType: detected.contentType, bytes: buffer.length, error: "too small" });
+      res.status(415).json({ error: "Image too small" });
+      return;
+    }
     // Cap the long edge before the bytes reach a GPU: THREE.TextureLoader decodes
     // and uploads on the frame the material first renders, so a large source
     // stutters the tunnel. downscaleProxiedImage never throws: anything it cannot
@@ -813,8 +839,8 @@ app.delete("/api/genai/job/:id", (req, res) => {
 // request looks local, which is why BIND_HOST=127.0.0.1 and TRUST_PROXY=1 belong
 // together in production.
 //
-// Grown members (GENAI_POOL_GROW_DIR) are listed beside baked ones; a round-2
-// grown member can have been triggered by a visitor, hence the review.
+// Grown members (GENAI_POOL_GROW_DIR) are listed beside baked ones; any round
+// past 1 can have been triggered by a visitor, hence the review.
 function poolReviewGate(req, res, next) {
   if ((!GENAI_POOL_DIR && !GENAI_POOL_GROW_DIR) || !isLocalRequest(req)) {
     res.status(404).json({ error: "Not found" });
@@ -848,6 +874,77 @@ function syncLiveImagesMade() {
 }
 setInterval(syncLiveImagesMade, 60_000).unref();
 
+// The images the piece made, with their prompts, from the saved copies
+// (GENAI_SAVE_IMAGES_TO_DISK). Pooled draws are not saved, so they are absent;
+// bookmark lineages are on /admin/pool.
+app.get("/admin/generated", localOnlyGate, (_req, res) => {
+  res.setHeader("cache-control", "no-store");
+  res.type("html").send(fs.readFileSync(new URL("./generated-review.html", import.meta.url), "utf8"));
+});
+
+app.get("/admin/generated.json", localOnlyGate, (req, res) => {
+  const hours = clampNumber(req.query.hours, 1, 24 * 30, 24);
+  res.setHeader("cache-control", "no-store");
+  res.json({ saving: getGenAiSaveImagesToDisk(), hours, items: listSavedGenAiImages(Date.now() - hours * 3600 * 1000) });
+});
+
+app.get("/admin/generated/image/:name", localOnlyGate, (req, res) => {
+  const name = String(req.params.name || "");
+  // Only names the listing hands out: no separators, no dot-dot.
+  if (!/^[\w.-]+\.(png|jpg|webp|gif)$/.test(name) || name.includes("..")) {
+    res.status(404).end();
+    return;
+  }
+  const filePath = generatedImageFilePath(name);
+  if (!fs.existsSync(filePath)) {
+    res.status(404).end();
+    return;
+  }
+  res.setHeader("cache-control", "private, max-age=3600");
+  res.sendFile(filePath instanceof URL ? decodeURIComponent(filePath.pathname) : filePath);
+});
+
+function listSavedGenAiImages(sinceMs) {
+  if (!fs.existsSync(GENERATED_IMAGES_DIR)) {
+    return [];
+  }
+  const items = [];
+  for (const entry of fs.readdirSync(GENERATED_IMAGES_DIR, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".json")) {
+      continue;
+    }
+    const file = entry.name.slice(0, -".json".length);
+    try {
+      const meta = JSON.parse(fs.readFileSync(generatedImageFilePath(entry.name), "utf8"));
+      if (Date.parse(meta.at) >= sinceMs && fs.existsSync(generatedImageFilePath(file))) {
+        items.push({ ...meta, file });
+      }
+    } catch {
+      // A half-written or foreign file; skip it.
+    }
+  }
+  return items.sort((a, b) => b.at.localeCompare(a.at));
+}
+
+// Where admin rows link to: the public site on the box, the Vite dev server here.
+const ADMIN_APP_ORIGIN = (process.env.PUBLIC_APP_ORIGIN || "http://localhost:5173").replace(/\/+$/, "");
+
+app.get("/admin/queries", localOnlyGate, (_req, res) => {
+  res.setHeader("cache-control", "no-store");
+  res.type("html").send(fs.readFileSync(new URL("./queries-review.html", import.meta.url), "utf8"));
+});
+
+app.get("/admin/queries.json", localOnlyGate, (req, res) => {
+  const hours = clampNumber(req.query.hours, 1, 24 * 7, 24);
+  res.setHeader("cache-control", "no-store");
+  res.json({
+    days: liveMonitor.queryLogDays,
+    hours,
+    appOrigin: ADMIN_APP_ORIGIN,
+    items: liveMonitor.queries(Date.now() - hours * 3600 * 1000)
+  });
+});
+
 app.get("/admin/live.json", localOnlyGate, (_req, res) => {
   syncLiveImagesMade();
   const spend = spendGuard.snapshot();
@@ -863,8 +960,48 @@ app.get("/admin/live.json", localOnlyGate, (_req, res) => {
       maxBytes: getGenAiImageCacheMaxBytes(),
       poolBytes: poolMemberBytesTotal
     },
-    geoIp: Boolean(geoIpReader)
+    geoIp: Boolean(geoIpReader),
+    appOrigin: ADMIN_APP_ORIGIN,
+    quota: quotaSnapshot()
   });
+});
+
+// Who is at their daily cap. The pool-grow bucket is a key like any client's,
+// with its own limit.
+function quotaSnapshot() {
+  if (!spendGuard.active) {
+    return null;
+  }
+  const spend = spendGuard.snapshot();
+  const scope = (name) => ({
+    used: spend[name].total,
+    limit: spend.limits[name].global,
+    perClient: spend.limits[name].ip,
+    clients: spendGuard.clients(name).slice(0, 50).map(({ key, used }) => ({
+      key,
+      used,
+      limit: name === "genai" && key === POOL_GROW_SPEND_KEY ? GENAI_POOL_GROW_DAILY_CAP : spend.limits[name].ip,
+      country: key === POOL_GROW_SPEND_KEY ? "" : lookupCountry(key.replace(/\/64$/, ""))
+    }))
+  });
+  return { day: spend.day, genai: scope("genai"), search: scope("search") };
+}
+
+// Under /api so loopbackBrowserGuard turns away a foreign page posting here
+// while the admin tunnel is open.
+app.post("/api/admin/quota/reset", localOnlyGate, (req, res) => {
+  const scope = String(req.body?.scope || "");
+  if (!["genai", "search"].includes(scope)) {
+    res.status(400).json({ error: "scope must be genai or search" });
+    return;
+  }
+  const result = spendGuard.reset(scope, String(req.body?.key || ""));
+  if (!result.ok) {
+    res.status(409).json({ error: "Spend guard is off on this server" });
+    return;
+  }
+  logApiQuery("admin.quota_reset", { scope, client: req.body?.key ? "one" : "all", freed: result.freed });
+  res.json({ ok: true, freed: result.freed, quota: quotaSnapshot() });
 });
 
 app.get("/admin/pool", poolReviewGate, (_req, res) => {
@@ -1390,7 +1527,7 @@ app.post("/api/genai", async (req, res) => {
   }
 
   const negativePrompt = normalizeGenAiPrompt(req.body?.negativePrompt);
-  const count = clampNumber(req.body?.count, 1, DEFAULT_LIMIT, getIntegerSetting("GENAI_COUNT"));
+  let count = clampNumber(req.body?.count, 1, DEFAULT_LIMIT, getIntegerSetting("GENAI_COUNT"));
   const provider = getGenAiProvider();
   const requestLogDetails = genAiQueryLogDetails({
     provider,
@@ -1448,8 +1585,8 @@ app.post("/api/genai", async (req, res) => {
   // The batch seed is minted here because the planner must choose each slot's
   // modifier with the seed the generator will then use.
   const batchSeed = seed ?? createGenAiSeed();
-  const poolBatch = planGenAiPoolBatch({ prompt, negativePrompt, count, sourceRecord, batchSeed });
-  const billableCount = poolBatch ? poolBatch.freshCount : count;
+  let poolBatch = planGenAiPoolBatch({ prompt, negativePrompt, count, sourceRecord, batchSeed });
+  let billableCount = poolBatch ? poolBatch.freshCount : count;
   Object.assign(requestLogDetails, genAiPoolLogDetails(poolBatch));
 
   const promptCacheKey = buildGenAiPromptCacheKey({ prompt, negativePrompt, count, sourceRecord, seed, poolBatch });
@@ -1473,10 +1610,19 @@ app.post("/api/genai", async (req, res) => {
 
   // Reserve the whole billable batch before the provider is touched (one call can
   // be 15 images); released below for whatever is not delivered.
-  const spendReservation = spendGuard.reserve("genai", {
-    key: getSpendClientKey(req),
-    amount: billableCount
-  });
+  const growsPool = Boolean(poolBatch?.growing) && GENAI_POOL_GROW_DAILY_CAP > 0;
+  let spendReservation = spendGuard.reserve("genai", growsPool
+    ? { key: POOL_GROW_SPEND_KEY, amount: billableCount, ipLimit: GENAI_POOL_GROW_DAILY_CAP }
+    : { key: getSpendClientKey(req), amount: billableCount });
+  if (!spendReservation.ok && poolBatch?.pooledCount > 0) {
+    // Over budget, but the pool already holds images for this: show those.
+    logApiQuery("genai.pool_only", { ...requestLogDetails, scope: spendReservation.reason });
+    poolBatch = poolOnlyGenAiBatch(poolBatch);
+    count = poolBatch.slots.length;
+    billableCount = 0;
+    Object.assign(requestLogDetails, { count }, genAiPoolLogDetails(poolBatch));
+    spendReservation = spendGuard.reserve("genai", { amount: 0 });
+  }
   if (!spendReservation.ok) {
     logApiQuery("genai.budget", {
       ...requestLogDetails,
@@ -2316,6 +2462,7 @@ function buildSeededGenAiCacheKey({ provider, prompt, negativePrompt, count, sou
     variationStrengthMax: sourceRecord ? getNumberSetting("GENAI_VARIATION_STRENGTH_MAX") : null,
     varySeedMode: sourceRecord ? getGenAiVarySeedMode() : null,
     varyModifiers: sourceRecord ? getStringSetting("GENAI_VARY_MODIFIERS") : null,
+    varyModifierTexts: sourceRecord ? getStringSetting("GENAI_VARY_MODIFIER_TEXTS") : null,
     varyModifierMode: sourceRecord ? getGenAiVaryModifierMode() : null,
     varyModifierStyle: sourceRecord ? getGenAiVaryModifierStyle() : null,
     varyModifierPayload: sourceRecord ? getGenAiVaryModifierPayload() : null
@@ -2775,7 +2922,8 @@ function rateLimitRequests(req, res, next) {
 function liveMonitorMiddleware(req, res, next) {
   const tracked = liveMonitor.touch(parseSessionId(req.get("x-session-id")), () => ({
     country: lookupCountry(req.ip),
-    device: deviceFromUserAgent(req.get("user-agent"))
+    device: deviceFromUserAgent(req.get("user-agent")),
+    referrer: parseReferrer(req.get("x-referrer"))
   }), getSpendClientKey(req));
   res.once("finish", () => countLiveRequest(req, res));
   liveSessionContext.run(tracked ? tracked.id : "", next);
@@ -3124,6 +3272,7 @@ function genAiQueryLogDetails({ provider = getGenAiProvider(), prompt = "", coun
       ? (sourceRecord ? getFalImageModel() : getFalTextModel())
       : safeResolvedGenAiEndpoint(provider),
     prompt,
+    bookmark: GENAI_BOOKMARK_PROMPTS.has(normalizeText(sourceRecord?.genai?.prompt || prompt)),
     mode: sourceRecord ? "vary" : "generate",
     sourceId: sourceRecord?.id || null,
     count,
@@ -3171,7 +3320,13 @@ function getPublicSettings() {
     publicSettings[key] = {
       value: definition.type === "secret" ? maskSecret(rawValue) : coerceSettingValue(rawValue, definition),
       source: getSettingSource(key),
-      secret: definition.type === "secret"
+      secret: definition.type === "secret",
+      // What it would be without the saved override, so the panel can tell a
+      // real change from a saved copy of the default.
+      fallback: definition.type === "secret" ? null : coerceSettingValue(
+        process.env[key] !== undefined && process.env[key] !== "" ? process.env[key] : definition.defaultValue,
+        definition
+      )
     };
   }
   return publicSettings;
@@ -3179,7 +3334,9 @@ function getPublicSettings() {
 
 function getSettingsMeta() {
   return {
-    generatedImagesDir: getGeneratedImagesDirDisplayPath()
+    generatedImagesDir: getGeneratedImagesDirDisplayPath(),
+    recommendedSteps: recommendedStepsSummary(),
+    emojiTexts: getGenAiVaryModifierPhraseMap()
   };
 }
 
@@ -3475,6 +3632,12 @@ function validateSettingsUpdate(rawSettings) {
     if (!definition) {
       throw new Error(`Unknown setting: ${key}`);
     }
+    // A blank optional number is a value, "send none", not a reset: otherwise a
+    // cleared Steps field falls back to its default of 8.
+    if (value === "" && definition.type.startsWith("optional")) {
+      next[key] = "";
+      continue;
+    }
     if (value === null || value === undefined || value === "") {
       delete next[key];
       continue;
@@ -3658,14 +3821,23 @@ async function runGenAiSettingsTest(stage) {
       if (!response.ok) {
         throw new Error(`GenAI connect returned HTTP ${response.status}`);
       }
-      return { target: "genai", stage, provider };
+      // Draw Things names the loaded file `model`, A1111 `sd_model_checkpoint`.
+      const options = await response.json().catch(() => ({}));
+      const model = String(options?.model || options?.sd_model_checkpoint || "");
+      const steps = recommendedSteps(model);
+      return {
+        target: "genai",
+        stage,
+        provider,
+        model: model ? `${model}${steps ? ` (recommended ${steps} steps)` : ""}${isEditModel(model) ? ", edit model" : ""}` : ""
+      };
     }
     if (provider === "fal") {
       if (!getFalApiKey()) {
         throw new ProviderConfigError("GENAI_API_KEY or FAL_KEY is required for GENAI_PROVIDER=fal");
       }
       const capabilities = getFalModelCapabilities();
-      return { target: "genai", stage, provider, model: capabilities.textModel, profile: capabilities.id };
+      return { target: "genai", stage, provider, model: `${capabilities.textModel}, ${capabilities.imageModel}`, profile: capabilities.id };
     }
     if (provider === "custom" || provider === "relay") {
       if (!resolveGenAiEndpointValue(provider)) {
@@ -3783,17 +3955,21 @@ function normalizeGenAiVarySeedMode(raw) {
 // style:   replace (default: the img2img prompt is the modifier payload alone;
 //          the source image already carries the content, so the modifier is the
 //          only conditioning and denoising strength controls the pull) | append
-//          (modifier appended to the lineage prompt, capped).
+//          (the newest GENAI_VARY_PROMPT_EMOJI modifiers appended to the
+//          lineage prompt).
 // payload: text (default: a short adjective phrase mapped from the emoji) |
 //          emoji (raw-character fallback for providers whose text encoders
 //          understand emoji strongly).
-const VARY_MODIFIER_STACK_CAP = 2;
+// The stack is the lineage's emoji, oldest first, for display and pool keys;
+// past the cap the oldest drops off. Only the newest few are sent: the source
+// image already carries the earlier ones.
+const VARY_MODIFIER_STACK_CAP = 6;
 
 // Built-in emoji->phrase defaults for payload=text. Overridable per emoji via
 // `emoji:phrase` tokens in GENAI_VARY_MODIFIERS; an override phrase is one
 // whitespace-free token (e.g. `🧊:frozen`), which is why multi-word/comma
 // phrases ship as these defaults. Emoji need no separator; see
-// server/vary-modifiers.js.
+// shared/vary-modifiers.js.
 const VARY_MODIFIER_DEFAULT_PHRASES = {
   "🧊": "icy, frozen",
   "🌶️": "spicy, hot red",
@@ -3815,7 +3991,21 @@ const VARY_MODIFIER_DEFAULT_PHRASES = {
   "🕯️": "candle, warm candlelit flame",
   "🚿": "shower, falling water and steam",
   "🤗": "warm, joyful",
-  "🤖": "robotic, mechanical"
+  "🤖": "robotic, mechanical",
+  "🥛": "glass of milk, milky",
+  "💦": "splashing droplets, sweaty and steamy",
+  "😈": "grinning devil, mischievous and naughty",
+  "🚀": "rocket launch, to the moon",
+  "❤️": "red heart, love",
+  "🎧": "headphones, music",
+  "🥰": "smitten, surrounded by little hearts",
+  "🍆": "aubergine, eggplant, cheeky innuendo",
+  "📹": "video, movie, film, filming",
+  "☀️": "blazing sunshine, summer holiday",
+  "😉": "wink, flirtatious, in on the joke",
+  "🐷": "pig, piggy",
+  "🫶": "heart hands, caring, solidarity",
+  "🤩": "star-struck, dazzled by fame"
 };
 
 function normalizeGenAiVaryModifierMode(raw) {
@@ -3828,7 +4018,7 @@ function normalizeGenAiVaryModifierMode(raw) {
 
 function normalizeGenAiVaryModifierStyle(raw) {
   const value = String(raw || "").trim().toLowerCase();
-  if (value === "replace" || value === "append") {
+  if (value === "replace" || value === "append" || value === "auto") {
     return value;
   }
   return "";
@@ -3869,7 +4059,7 @@ function getGenAiVaryModifierPayload() {
 }
 
 // The emoji pick list from GENAI_VARY_MODIFIERS. Separators between emoji are
-// optional — see splitVaryModifierEntries in server/vary-modifiers.js.
+// optional — see splitVaryModifierEntries in shared/vary-modifiers.js.
 function getGenAiVaryModifierEmojis() {
   return splitVaryModifierEntries(getStringSetting("GENAI_VARY_MODIFIERS")).map((entry) => entry.emoji);
 }
@@ -3883,7 +4073,7 @@ function getGenAiVaryModifierPhraseMap() {
       map[emoji] = phrase;
     }
   }
-  return map;
+  return { ...map, ...parseVaryModifierTexts(getStringSetting("GENAI_VARY_MODIFIER_TEXTS")) };
 }
 
 // The text phrase for an emoji, falling back to the raw emoji when unmapped so
@@ -3963,9 +4153,11 @@ function renderVaryModifierPayload(emoji, payload) {
 }
 
 function buildVaryModifierStack(sourceRecord, chosen) {
-  const inherited = collectInheritedModifierEmojis(sourceRecord);
-  const orderedEmoji = [...inherited].reverse().filter((emoji) => emoji !== chosen);
-  return [...orderedEmoji, chosen].slice(-VARY_MODIFIER_STACK_CAP);
+  // The source's own stack survives its ancestors leaving the image store; the
+  // walk is for records made before stacks were stored.
+  const stored = sourceRecord?.genai?.modifier?.stack;
+  const ordered = Array.isArray(stored) ? stored : [...collectInheritedModifierEmojis(sourceRecord)].reverse();
+  return [...ordered.filter((emoji) => emoji !== chosen), chosen].slice(-VARY_MODIFIER_STACK_CAP);
 }
 
 // Compose the modifier for one variation. Returns:
@@ -3976,15 +4168,18 @@ function buildVaryModifierStack(sourceRecord, chosen) {
 //   replace (default) - the sent prompt is the modifier payload alone (the source
 //     image already carries the content; denoising strength controls how far the
 //     modifier pulls). No lineage prompt, no compounding.
-//   append - modifier appended to the lineage prompt, compounding across
-//     vary-of-vary, capped at VARY_MODIFIER_STACK_CAP.
+//   append - the newest GENAI_VARY_PROMPT_EMOJI modifiers appended to the
+//     lineage prompt; earlier ones are in the source image, not the text.
+//   auto - replace for a local edit model (model-profiles.js); any other local
+//     model gets the lineage prompt plus every stack emoji (`appendCount`), since
+//     it redraws rather than edits the source.
 // `style` overrides the configured setting for one provider request. Replace is
 // only coherent where the request also carries a denoising-strength dial, which
 // is what keeps the source in the frame. An edit endpoint without one (Fal Klein;
 // see getFalModelCapabilities) would receive a bare emoji and replace the picture
 // with the emoji's subject, so those callers pass append, which anchors the edit
 // to the lineage prompt.
-function composeVaryModifier({ basePrompt, sourceRecord, seed = null, salt = 0, style: styleOverride = null }) {
+function composeVaryModifier({ basePrompt, sourceRecord, seed = null, salt = 0, style: styleOverride = null, appendCount = null }) {
   const mode = getGenAiVaryModifierMode();
   if (!sourceRecord || mode === "off") {
     return { prompt: basePrompt, modifier: null };
@@ -3999,7 +4194,9 @@ function composeVaryModifier({ basePrompt, sourceRecord, seed = null, salt = 0, 
   if (!chosen) {
     return { prompt: basePrompt, modifier: null };
   }
-  const style = styleOverride || getGenAiVaryModifierStyle();
+  // auto with no model to judge by: append, which keeps the subject either way.
+  const configured = getGenAiVaryModifierStyle();
+  const style = styleOverride || (configured === "auto" ? "append" : configured);
   const payload = getGenAiVaryModifierPayload();
   const phrase = payload === "text" ? getVaryModifierPhrase(chosen) : null;
 
@@ -4015,11 +4212,11 @@ function composeVaryModifier({ basePrompt, sourceRecord, seed = null, salt = 0, 
   // older records may carry one: strip any trailing inherited-emoji suffix before
   // re-composing.
   const cleanBase = stripModifierSuffix(basePrompt, inherited);
-  // `inherited` is closest-first (newest ancestor first); reverse to oldest→newest
-  // so the newest modifier applies last (rightmost) and slice(-cap) keeps the
-  // most-recent modifiers when the vary-of-vary stack would exceed the cap.
   const stack = buildVaryModifierStack(sourceRecord, chosen);
-  const suffix = stack.map((emoji) => renderVaryModifierPayload(emoji, payload)).join(payload === "text" ? ", " : " ");
+  const suffix = stack
+    .slice(-(appendCount || getIntegerSetting("GENAI_VARY_PROMPT_EMOJI")))
+    .map((emoji) => renderVaryModifierPayload(emoji, payload))
+    .join(payload === "text" ? ", " : " ");
   const sentPrompt = cleanBase ? `${cleanBase}, ${suffix}` : suffix;
   return { prompt: sentPrompt, modifier: { emoji: chosen, phrase, sentPrompt, stack } };
 }
@@ -4671,7 +4868,7 @@ function buildGenAiPoolSlots({ prompt, negativePrompt, count, sourceRecord, batc
 
 function planGenAiPoolBatch({ prompt, negativePrompt, count, sourceRecord, batchSeed }) {
   const growRound = grownGenAiPool.active
-    ? poolGrowthRound({ prompt, negativePrompt, sourceRecord, bookmarkPrompts: GENAI_BOOKMARK_PROMPTS })
+    ? poolGrowthRound({ prompt, negativePrompt, sourceRecord, bookmarkPrompts: GENAI_BOOKMARK_PROMPTS, maxRound: GENAI_POOL_GROW_MAX_ROUND })
     : 0;
   if (!genAiPool.active && !growRound) {
     return null;
@@ -4710,12 +4907,18 @@ function planGenAiPoolBatch({ prompt, negativePrompt, count, sourceRecord, batch
     return drawers.get(slot.key)();
   };
 
+  // A bookmark key that has stopped growing buys nothing more: the pool is the
+  // whole answer, so the request is free and no quota can refuse it.
+  const growing = Boolean(growRound) && GENAI_POOL_GROW_MAX_PER_KEY > 0 &&
+    slots.some((slot) => poolMemberCount(pool, slot.key) < GENAI_POOL_GROW_MAX_PER_KEY);
+  const grownOut = Boolean(growRound) && !growing;
+
   // While every generator slot is busy, a fresh image costs this visitor a
   // 20-40 s wait in the queue, so the pool covers every slot it can.
   const plan = planPoolDraw({
     poolSize: reusable,
     count,
-    newCount: isGenAiQueueFull() ? 0 : Math.min(count, randomGenAiPoolFreshQuota())
+    newCount: isGenAiQueueFull() || grownOut ? 0 : Math.min(count, randomGenAiPoolFreshQuota())
   });
 
   // Pooled slots are chosen at random across the batch so pooled and fresh
@@ -4746,8 +4949,17 @@ function planGenAiPoolBatch({ prompt, negativePrompt, count, sourceRecord, batch
     reusable,
     pooledCount,
     freshCount: count - pooledCount,
+    growing,
     drawFor
   };
+}
+
+// The pooled slots alone, renumbered: a smaller sphere that costs nothing.
+function poolOnlyGenAiBatch(poolBatch) {
+  const slots = poolBatch.slots
+    .filter((slot) => slot.pooled)
+    .map((slot, index) => ({ ...slot, index }));
+  return { ...poolBatch, slots, pooledCount: slots.length, freshCount: 0, growing: false };
 }
 
 // Every record drawn from one member file shares one Buffer and one WebP, so a
@@ -5304,8 +5516,9 @@ async function generateImagesViaSdApi({ provider, prompt, negativePrompt, count,
     batch_size: count,
     seed: requestSeed
   };
-  if (getOptionalIntegerSetting("GENAI_STEPS") !== null) {
-    body.steps = getOptionalIntegerSetting("GENAI_STEPS");
+  const steps = resolveSdApiSteps(await sdApiModelIfNeeded(provider));
+  if (steps !== null) {
+    body.steps = steps;
   }
   if (getOptionalNumberSetting("GENAI_CFG_SCALE") !== null) {
     body.cfg_scale = getOptionalNumberSetting("GENAI_CFG_SCALE");
@@ -5349,6 +5562,9 @@ async function varyImagesViaSdApi({ provider, prompt, negativePrompt, count, sou
   // Keep the batch modifier stable even when the request carries no seed: fall
   // back to this call's baseSeed so all variations pick the same emoji.
   const effectiveModifierSeed = modifierSeed ?? baseSeed;
+  const model = await sdApiModelIfNeeded(provider);
+  const steps = resolveSdApiSteps(model);
+  const style = getGenAiVaryModifierStyle() === "auto" ? (isEditModel(model) ? "replace" : "append") : null;
   const width = sourceRecord.width || getIntegerSetting("GENAI_WIDTH");
   const height = sourceRecord.height || getIntegerSetting("GENAI_HEIGHT");
 
@@ -5358,7 +5574,9 @@ async function varyImagesViaSdApi({ provider, prompt, negativePrompt, count, sou
       basePrompt: prompt,
       sourceRecord,
       seed: effectiveModifierSeed,
-      salt: modifierIndexBase + items.length
+      salt: modifierIndexBase + items.length,
+      style,
+      appendCount: style === "append" ? VARY_MODIFIER_STACK_CAP : null
     });
     const body = {
       prompt: effectivePrompt,
@@ -5370,8 +5588,8 @@ async function varyImagesViaSdApi({ provider, prompt, negativePrompt, count, sou
       init_images: [sourceRecord.buffer.toString("base64")],
       denoising_strength: strength
     };
-    if (getOptionalIntegerSetting("GENAI_STEPS") !== null) {
-      body.steps = getOptionalIntegerSetting("GENAI_STEPS");
+    if (steps !== null) {
+      body.steps = steps;
     }
     if (getOptionalNumberSetting("GENAI_CFG_SCALE") !== null) {
       body.cfg_scale = getOptionalNumberSetting("GENAI_CFG_SCALE");
@@ -5845,6 +6063,49 @@ function getSdApiSeeds(info, requestSeed, count) {
   return Array.from({ length: count }, (_, index) => requestSeed + index);
 }
 
+// The loaded model's file name, from the app's own options. Cached briefly: it
+// changes only when someone picks another model in Draw Things.
+const SD_API_MODEL_CACHE_MS = 30_000;
+let sdApiModelCache = { at: 0, key: "", model: "" };
+
+async function getSdApiModelName(provider) {
+  const endpoint = resolveGenAiEndpoint(provider);
+  const key = `${provider} ${endpoint}`;
+  if (sdApiModelCache.key === key && Date.now() - sdApiModelCache.at < SD_API_MODEL_CACHE_MS) {
+    return sdApiModelCache.model;
+  }
+  let model = "";
+  try {
+    const response = await fetchWithTimeout(
+      buildSdApiUrl(endpoint, "options"),
+      { headers: { accept: "application/json" } },
+      5_000,
+      { applyHostAllowlist: false, allowPrivateAddress: true, allowNonStandardPort: true }
+    );
+    if (response.ok) {
+      const options = await response.json();
+      model = String(options?.model || options?.sd_model_checkpoint || "");
+    }
+  } catch {
+    // Unknown model: configured steps, append style.
+  }
+  sdApiModelCache = { at: Date.now(), key, model };
+  return model;
+}
+
+// Only asked when a setting depends on it, so the default path makes no extra call.
+function sdApiModelIfNeeded(provider) {
+  const needed = getBooleanSetting("GENAI_STEPS_RECOMMENDED") || getGenAiVaryModifierStyle() === "auto";
+  return needed ? getSdApiModelName(provider) : Promise.resolve("");
+}
+
+// Blank GENAI_STEPS sends none, so the app uses its own. GENAI_STEPS_RECOMMENDED
+// overrides both for a model in model-profiles.js.
+function resolveSdApiSteps(model) {
+  const recommended = getBooleanSetting("GENAI_STEPS_RECOMMENDED") ? recommendedSteps(model) : null;
+  return recommended ?? getOptionalIntegerSetting("GENAI_STEPS");
+}
+
 function addDrawThingsGuidanceEmbed(provider, body) {
   if (provider !== "drawthings") {
     return;
@@ -6240,12 +6501,18 @@ function storeGenAiImageSource({ source, context }) {
   const measured = measureRasterImageSize(source.buffer);
   const width = measured?.width || context.width || null;
   const height = measured?.height || context.height || null;
+  // Generation within the lineage: 1 for a base, +1 per variation, 0 once an
+  // imported image is in it. Stored rather than walked because ancestors leave
+  // the image store long before their descendants are varied.
+  const parent = context.parentId ? genAiImageStore.get(context.parentId) : null;
+  const isGeneratedRoot = !context.origin || context.origin === "pool";
   const genai = {
     id,
     prompt: context.prompt,
     seed: context.seed,
     strength: context.strength,
-    parentId: context.parentId
+    parentId: context.parentId,
+    round: context.parentId ? (parent?.genai?.round ? parent.genai.round + 1 : 0) : (isGeneratedRoot ? 1 : 0)
   };
   // Additive vary emoji modifier. Only set on variation items that received a
   // modifier; absent on generate/off-mode. `sentPrompt` is the exact string sent
@@ -6265,7 +6532,8 @@ function storeGenAiImageSource({ source, context }) {
       id,
       source,
       prompt: context.prompt,
-      now
+      now,
+      meta: { genai, origin: context.origin || null }
     });
 
   // A pooled record's bytes belong to the pool (readSharedPoolMember), not to it.
@@ -6298,7 +6566,7 @@ function storeGenAiImageSource({ source, context }) {
   };
 }
 
-function saveGeneratedImageFile({ id, source, prompt, now }) {
+function saveGeneratedImageFile({ id, source, prompt, now, meta = null }) {
   if (!getGenAiSaveImagesToDisk()) {
     return null;
   }
@@ -6312,6 +6580,21 @@ function saveGeneratedImageFile({ id, source, prompt, now }) {
     const ext = imageExtensionForContentType(source.contentType);
     const fileName = `${timestamp}_${id}_${slug}.${ext}`;
     fs.writeFileSync(generatedImageFilePath(fileName), source.buffer);
+    // What /admin/generated lists. Beside the image so the retention sweep,
+    // which goes by mtime, removes both.
+    if (meta) {
+      const { genai } = meta;
+      fs.writeFileSync(generatedImageFilePath(`${fileName}.json`), JSON.stringify({
+        id,
+        at: new Date(now).toISOString(),
+        prompt: genai.prompt,
+        stack: genai.modifier?.stack || [],
+        sentPrompt: genai.modifier?.sentPrompt || null,
+        round: genai.round,
+        parentId: genai.parentId,
+        origin: meta.origin
+      }));
+    }
     return fileName;
   } catch (err) {
     console.warn(`Could not save generated image ${id}: ${err.message}`);
@@ -6464,6 +6747,9 @@ function getStoredGenAiImage(id) {
   if (!record) {
     return null;
   }
+  // Sliding: each vary walks the lineage through here, so a lineage still being
+  // explored (and listed for download) outlives the TTL from its creation.
+  record.expiresAt = Date.now() + getGenAiImageCacheTtlMs();
   genAiImageStore.delete(id);
   genAiImageStore.set(id, record);
   return record;
@@ -6621,24 +6907,14 @@ function cardLinkFor($, img, sourceUrl) {
   return null;
 }
 
+// Lazy-loading pages put a stand-in (a grey PNG, a 1px GIF, a data: URI) in
+// `src` and the real image in data-src or srcset, so a stand-in loses to them.
 function pickImageSource($, img) {
-  const src = $(img).attr("src");
-  if (src) {
-    return src.trim();
-  }
-  const dataSrc = $(img).attr("data-src");
-  if (dataSrc) {
-    return dataSrc.trim();
-  }
   const srcSet = $(img).attr("srcset");
-  if (!srcSet) {
-    return null;
-  }
-  const first = srcSet.split(",")[0]?.trim();
-  if (!first) {
-    return null;
-  }
-  return first.split(" ")[0]?.trim() || null;
+  const candidates = [$(img).attr("src"), $(img).attr("data-src"), srcSet?.split(",")[0]?.trim().split(" ")[0]]
+    .map((value) => value?.trim())
+    .filter(Boolean);
+  return candidates.find((value) => !isStandInImageSource(value)) || candidates[0] || null;
 }
 
 function parseDimension(value) {
@@ -6702,7 +6978,11 @@ function fileExtension(pathname) {
 
 function passesDimensionHeuristic(imageUrl, linkUrl, width, height) {
   const linked = Boolean(linkUrl) && linkUrl !== imageUrl;
-  if (isLikelyFaviconUrl(imageUrl)) {
+  if (isLikelyFaviconUrl(imageUrl) || isPlaceholderImageUrl(imageUrl)) {
+    return false;
+  }
+  const declared = declaredImageEdge(imageUrl);
+  if (declared !== null && declared <= TINY_DECLARED_EDGE_PX) {
     return false;
   }
   if (width === null || height === null) {
@@ -6861,13 +7141,16 @@ async function extractViaPlaywright(sourceUrl, limit) {
     // size and fails the size filter, which made the count vary with network timing.
     await page.waitForLoadState("networkidle", { timeout: PLAYWRIGHT_SETTLE_MS }).catch(() => {});
 
-    const { title, items } = await page.evaluate(({ cap, maxDepth, maxLinksPerImage, maxUrl, maxText }) => {
+    const { title, items } = await page.evaluate(({ cap, maxDepth, maxLinksPerImage, maxUrl, maxText, standInSource }) => {
       // Every string goes through the init script's clip (playwright-render.js),
       // and `out` grows by index, not push: the page may have patched both.
       const clip = window.__sbClip;
       if (typeof clip !== "function") {
         return { title: "", items: [] };
       }
+      // A page could patch RegExp; the worst it gets is its own stand-in chosen,
+      // which passesDimensionHeuristic() then drops.
+      const standIn = new RegExp(standInSource, "i");
       const url = (value) => (clip(value, maxUrl + 1).length > maxUrl ? "" : clip(value, maxUrl));
       // cardLinkFor(), in the page.
       const cardLink = (img) => {
@@ -6897,7 +7180,9 @@ async function extractViaPlaywright(sourceUrl, limit) {
           break;
         }
 
-        const imageUrl = url(img.currentSrc) || url(img.src) || url(img.getAttribute("src")) || url(img.getAttribute("data-src"));
+        // As pickImageSource(): a lazy page's stand-in loses to the real image.
+        const sources = [img.currentSrc, img.src, img.getAttribute("src"), img.getAttribute("data-src")].map(url).filter(Boolean);
+        const imageUrl = sources.find((value) => !standIn.test(value.split(/[?#]/)[0].split("/").pop())) || sources[0];
         if (!imageUrl) {
           continue;
         }
@@ -6934,7 +7219,8 @@ async function extractViaPlaywright(sourceUrl, limit) {
       maxDepth: CARD_LINK_MAX_DEPTH,
       maxLinksPerImage: MAX_LINKS_PER_IMAGE,
       maxUrl: RENDER_MAX_URL_CHARS,
-      maxText: RENDER_MAX_TEXT_CHARS
+      maxText: RENDER_MAX_TEXT_CHARS,
+      standInSource: PLACEHOLDER_IMAGE_NAME.source
     });
 
     const sanitized = items

@@ -265,61 +265,32 @@ test("append + payload=text: phrase appended, comma-separated", async () => {
   );
 });
 
-test("append vary-of-vary: modifiers compound in the prompt, capped at 2", async () => {
+test("append vary-of-vary: the newest 2 modifiers are sent; the stack keeps the last 6", async () => {
   await withA1111(
     { GENAI_VARY_MODIFIER_MODE: "batch", GENAI_VARY_MODIFIER_STYLE: "append", GENAI_VARY_MODIFIER_PAYLOAD: "emoji", GENAI_VARY_MODIFIERS: "🌶️" },
     async ({ server, mock }) => {
-      // First vary: base + 🌶️.
-      const parent = await generateSource(server, "a portrait");
-      const vary1 = await fetch(`${server.base}/api/genai`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source: { id: parent }, count: 1, seed: 3 })
-      });
-      assert.equal(vary1.status, 200);
-      const v1 = newVariations(await vary1.json(), parent)[0];
-      assert.equal(v1.genai.modifier.emoji, "🌶️");
-      const child = v1.genai.id;
-
-      // Second vary from that child, now with a different single-emoji set.
-      await fetch(`${server.base}/api/settings`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ settings: { GENAI_VARY_MODIFIERS: "🧊" } })
-      });
-      await fetch(`${mock.base}/__reset`, { method: "POST" });
-
-      const vary2 = await fetch(`${server.base}/api/genai`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source: { id: child }, count: 1, seed: 4 })
-      });
-      assert.equal(vary2.status, 200);
-      const v2 = newVariations(await vary2.json(), child)[0];
-      assert.equal(v2.genai.modifier.emoji, "🧊", "child stores its own new pick");
-
-      const prompt = (await img2imgPrompts(mock))[0];
-      assert.equal(prompt, "a portrait, 🌶️ 🧊", "compounded prompt, newest last, cap 2");
-
-      // Third vary: a third distinct emoji must not push the stack past 2.
-      await fetch(`${server.base}/api/settings`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ settings: { GENAI_VARY_MODIFIERS: "🦄" } })
-      });
-      await fetch(`${mock.base}/__reset`, { method: "POST" });
-
-      const vary3 = await fetch(`${server.base}/api/genai`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source: { id: v2.genai.id }, count: 1, seed: 5 })
-      });
-      assert.equal(vary3.status, 200);
-      newVariations(await vary3.json(), v2.genai.id);
-      const prompt3 = (await img2imgPrompts(mock))[0];
-      const emojiCount = [...prompt3].filter((ch) => /\p{Extended_Pictographic}/u.test(ch)).length;
-      assert.ok(emojiCount <= 2, `stack capped at 2 emoji (prompt was "${prompt3}")`);
-      assert.equal(prompt3, "a portrait, 🧊 🦄", "oldest 🌶️ dropped, newest 🦄 last");
+      let sourceId = await generateSource(server, "a portrait");
+      const emojis = ["🌶️", "🧊", "🦄", "🎆", "🍦", "🧀", "🌹"];
+      let last = null;
+      for (const [index, emoji] of emojis.entries()) {
+        await fetch(`${server.base}/api/settings`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ settings: { GENAI_VARY_MODIFIERS: emoji } })
+        });
+        await fetch(`${mock.base}/__reset`, { method: "POST" });
+        const vary = await fetch(`${server.base}/api/genai`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ source: { id: sourceId }, count: 1, seed: index + 3 })
+        });
+        assert.equal(vary.status, 200);
+        last = newVariations(await vary.json(), sourceId)[0];
+        const sent = emojis.slice(Math.max(0, index - 1), index + 1).join(" ");
+        assert.equal((await img2imgPrompts(mock))[0], `a portrait, ${sent}`, "the newest two, newest last");
+        sourceId = last.genai.id;
+      }
+      assert.deepEqual(last.genai.modifier.stack, emojis.slice(-6), "oldest 🌶️ dropped, newest last");
     }
   );
 });

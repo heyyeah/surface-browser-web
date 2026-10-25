@@ -53,6 +53,7 @@ import {
 import { loadRequestByMode } from "./api.js";
 import { createHandGestureState } from "./xr-hand-gestures.js";
 import { stepAutoAdvanceIdle } from "./idle-auto-advance.js";
+import { isSettingsOpen } from "./settings.js";
 
 const SPHERE_PORTAL_REVEAL_PROGRESS = 0.42;
 // Lead long enough that the J-key jump replays the whole pre-entry bloom (which
@@ -138,7 +139,9 @@ function maybeTransitionFromTunnelToSphere(dt) {
   if (state.appState !== AppState.TUNNEL) {
     return;
   }
-  if (state.cycleRequestInFlight || state.extractedItems.length === 0) {
+  // Open settings keep the viewer where they are: the tunnel flies on but does
+  // not hand over to the sphere.
+  if (state.cycleRequestInFlight || state.extractedItems.length === 0 || isSettingsOpen()) {
     state.tunnelSettledMs = 0;
     return;
   }
@@ -401,9 +404,9 @@ function updateStateMachine(dt) {
       state.sphereDwellSeconds = 0;
     }
 
-    // The third freeze is the first-run overlay (onboarding.js): the sphere waits
-    // rather than carrying the reader out mid-instruction.
-    if (!state.sphereInteractionHold && !state.sphereDwellHeldByOnboarding && !idle.suspended) {
+    // The third freeze is the first-run overlay (onboarding.js), the fourth the
+    // settings panel: the sphere waits rather than carrying the reader out.
+    if (!state.sphereInteractionHold && !state.sphereDwellHeldByOnboarding && !isSettingsOpen() && !idle.suspended) {
       state.sphereDwellSeconds += dt;
     }
 

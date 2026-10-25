@@ -79,9 +79,11 @@ test("/api/genai generate: envelope + per-image genai lineage with seeds", async
     assert.equal(json.meta.cached, false);
     assert.ok(json.meta.genaiCacheKey, "cache key present");
     assert.equal(json.items.length, 3, "count honored");
-    const savedFiles = fs.readdirSync(server.generatedImagesDir);
+    const allFiles = fs.readdirSync(server.generatedImagesDir);
+    const savedFiles = allFiles.filter((name) => !name.endsWith(".json"));
     assert.equal(savedFiles.length, 3, "generated images saved to disk");
     assert.ok(savedFiles.every((name) => name.includes("g_") && /\.(png|jpg|webp|gif)$/.test(name)), "saved files are image files");
+    assert.equal(allFiles.length, 6, "each image has its /admin/generated sidecar");
 
     const seeds = new Set();
     for (const item of json.items) {
@@ -516,6 +518,48 @@ test("/api/genai: unknown/expired source id -> 410", async () => {
     assert.equal(res.status, 410);
     const json = await res.json();
     assert.match(json.error, /expired|not found/i);
+  });
+});
+
+test("drawthings auto style: a repaint model gets every stack emoji's text", async () => {
+  await withDrawThings({
+    GENAI_VARY_MODIFIER_STYLE: "auto",
+    GENAI_VARY_MODIFIER_PAYLOAD: "text",
+    GENAI_VARY_PROMPT_EMOJI: "1",
+    GENAI_VARY_MODIFIERS: "🧊 🦦 🦘 🌹",
+    GENAI_VARY_MODIFIER_TEXTS: "🧊 ice text\n🦦 otter text;🦘: roo text\n🌹 rose text"
+  }, async ({ server, mock }) => {
+    const post = async (body) => (await fetch(`${server.base}/api/genai`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    })).json();
+    let json = await post({ prompt: "a lighthouse", count: 1 });
+    for (let round = 0; round < 4; round += 1) {
+      json = await post({ source: { id: json.items.at(-1).genai.id }, count: 1 });
+    }
+    const last = json.items.at(-1).genai.modifier;
+    assert.ok(last.stack.length >= 2, `a stack to test: ${last.stack}`);
+    const TEXT = { "🧊": "ice text", "🦦": "otter text", "🦘": "roo text", "🌹": "rose text" };
+    const { requests } = await (await fetch(`${mock.base}/requests`)).json();
+    const sent = requests.filter((entry) => entry.path === "/sdapi/v1/img2img").at(-1).body.prompt;
+    assert.equal(sent, `a lighthouse, ${last.stack.map((emoji) => TEXT[emoji]).join(", ")}`);
+  }, { MOCK_SDAPI_MODEL: "moss_image_sft_q8p.ckpt" });
+});
+
+test("/api/genai/image: each use renews the TTL, unused images still expire", async () => {
+  await withA1111({ GENAI_IMAGE_CACHE_TTL_MS: "600" }, async ({ server }) => {
+    const gen = await fetch(`${server.base}/api/genai`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "kept alive", count: 2 })
+    });
+    const [used, unused] = (await gen.json()).items.map((item) => `${server.base}${item.imageUrl}`);
+    for (let i = 0; i < 3; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      assert.equal((await fetch(used)).status, 200, "renewed on each use");
+    }
+    assert.equal((await fetch(unused)).status, 410, "expired from creation");
   });
 });
 
@@ -1262,4 +1306,75 @@ test("GENAI_PROGRESS_JOBS_MAX: free cache replays cannot evict another visitor's
     const poll = await fetch(`${server.base}/api/genai/job/${victim.jobId}`);
     assert.equal(poll.status, 200, "the running job is still there");
   }, { MOCK_SDAPI_DELAY_MS: "1500" });
+});
+
+test("drawthings: recommended steps and auto style follow the loaded model", async () => {
+  await withDrawThings({
+    GENAI_STEPS: "8",
+    GENAI_STEPS_RECOMMENDED: "1",
+    GENAI_VARY_MODIFIER_STYLE: "auto",
+    GENAI_VARY_MODIFIER_PAYLOAD: "text",
+    GENAI_VARY_MODIFIERS: "🧊"
+  }, async ({ server, mock }) => {
+    const base = await (await fetch(`${server.base}/api/genai`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a lighthouse", count: 1 })
+    })).json();
+    await fetch(`${server.base}/api/genai`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ source: { id: base.items[0].genai.id }, count: 1 })
+    });
+    const { requests } = await (await fetch(`${mock.base}/requests`)).json();
+    const txt = requests.find((entry) => entry.path === "/sdapi/v1/txt2img");
+    const img = requests.find((entry) => entry.path === "/sdapi/v1/img2img");
+    assert.equal(txt.body.steps, 30, "Moss's recommended steps beat GENAI_STEPS");
+    assert.equal(img.body.steps, 30);
+    assert.match(img.body.prompt, /^a lighthouse, /, "a repaint model keeps the subject in the prompt");
+  }, { MOCK_SDAPI_MODEL: "moss_image_sft_q8p.ckpt" });
+});
+
+test("drawthings: blank steps are left to the app, and an edit model gets the emoji text alone", async () => {
+  await withDrawThings({
+    GENAI_STEPS: "",
+    GENAI_VARY_MODIFIER_STYLE: "auto",
+    GENAI_VARY_MODIFIER_PAYLOAD: "text",
+    GENAI_VARY_MODIFIERS: "🧊"
+  }, async ({ server, mock }) => {
+    const put = await fetch(`${server.base}/api/settings`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ settings: { GENAI_STEPS: "" } })
+    });
+    assert.equal(put.status, 200);
+    const base = await (await fetch(`${server.base}/api/genai`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "a lighthouse", count: 1 })
+    })).json();
+    await fetch(`${server.base}/api/genai`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ source: { id: base.items[0].genai.id }, count: 1 })
+    });
+    const { requests } = await (await fetch(`${mock.base}/requests`)).json();
+    const txt = requests.find((entry) => entry.path === "/sdapi/v1/txt2img");
+    const img = requests.find((entry) => entry.path === "/sdapi/v1/img2img");
+    assert.equal("steps" in txt.body, false);
+    assert.doesNotMatch(img.body.prompt, /lighthouse/);
+  }, { MOCK_SDAPI_MODEL: "flux_2_klein_4b_q8p.ckpt" });
+});
+
+test("settings Connect names the model Draw Things has loaded", async () => {
+  await withDrawThings({}, async ({ server }) => {
+    const res = await fetch(`${server.base}/api/settings/test`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target: "genai", stage: "connect" })
+    });
+    const json = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(json));
+    assert.equal(json.model, "moss_image_sft_q8p.ckpt (recommended 30 steps)");
+  }, { MOCK_SDAPI_MODEL: "moss_image_sft_q8p.ckpt" });
 });

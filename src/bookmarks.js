@@ -3,10 +3,18 @@
 import { loadAndExtractUrl, loadGenAiPrompt, loadImageSearch } from "./api.js";
 import { bookmarksBtn, bookmarksMenu, urlInput } from "./dom.js";
 import { setAddressFeedback, focusSceneCanvas } from "./ui.js";
-import { BookmarkKind, DEFAULT_BOOKMARKS } from "./bookmark-presets.js";
+import { BookmarkKind, DEFAULT_BOOKMARKS, bookmarkTitle, pickStartBookmarks } from "./bookmark-presets.js";
 import { t } from "./i18n.js";
 
 let genAiBookmarksEnabled = false;
+// Picked once per page load, and shared, so the flat start screen and the VR
+// panel show the same three.
+let startBookmarks = null;
+
+function startFavoriteBookmarks() {
+  startBookmarks ??= pickStartBookmarks();
+  return startBookmarks;
+}
 
 function bookmarkModeLabel(kind) {
   if (kind === BookmarkKind.IMAGE_SEARCH) {
@@ -16,17 +24,6 @@ function bookmarkModeLabel(kind) {
     return t("vr.mode.genai");
   }
   return t("vr.mode.web");
-}
-
-function bookmarkTitle(bookmark) {
-  if (bookmark.kind !== BookmarkKind.WEB_PAGE) {
-    return bookmark.value;
-  }
-  try {
-    return new URL(bookmark.value).hostname.replace(/^www\./, "");
-  } catch {
-    return bookmark.value;
-  }
 }
 
 function setBookmarksMenuOpen(open) {
@@ -143,5 +140,6 @@ export {
   isGenAiBookmarksEnabled,
   setBookmarksMenuOpen,
   setGenAiBookmarksEnabled,
-  setupBookmarks
+  setupBookmarks,
+  startFavoriteBookmarks
 };

@@ -171,7 +171,7 @@ const sphereJs = fs.readFileSync(new URL("../src/sphere.js", import.meta.url), "
 const mainJs = fs.readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 
 test("the dwell clock freezes while suspended AND the paid branch re-checks", () => {
-  assert.match(transitionsJs, /if \(!state\.sphereInteractionHold && !state\.sphereDwellHeldByOnboarding && !idle\.suspended\) \{/);
+  assert.match(transitionsJs, /if \(!state\.sphereInteractionHold && !state\.sphereDwellHeldByOnboarding && !isSettingsOpen\(\) && !idle\.suspended\) \{/);
   assert.match(transitionsJs, /state\.sphereDwellSeconds >= SPHERE_DWELL_SECONDS && !idle\.suspended/);
 });
 

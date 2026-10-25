@@ -48,3 +48,21 @@ export function splitVaryModifierEntries(raw) {
   }
   return entries;
 }
+
+// GENAI_VARY_MODIFIER_TEXTS: one "emoji text" pair per line (or ";"), e.g.
+// "🦦 otter, playful wet fur". A ":" or "=" after the emoji is tolerated; a line
+// with no text is skipped, so that emoji keeps its built-in text or goes bare.
+export function parseVaryModifierTexts(raw) {
+  const texts = {};
+  for (const line of String(raw || "").split(/[\n;]/)) {
+    const match = /^\s*(\S+?)\s*[:=]?\s+(.*\S)\s*$/u.exec(line) || /^\s*(\S+?)[:=](.*\S)\s*$/u.exec(line);
+    if (!match) {
+      continue;
+    }
+    const [emoji] = splitVaryModifierEntries(match[1]).map((entry) => entry.emoji);
+    if (emoji) {
+      texts[emoji] = match[2];
+    }
+  }
+  return texts;
+}

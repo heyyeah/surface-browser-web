@@ -9,6 +9,7 @@ import {
   createLiveMonitor,
   describeEvent,
   deviceFromUserAgent,
+  parseReferrer,
   parseSessionId
 } from "../server/live-monitor.js";
 
@@ -195,4 +196,35 @@ test("the monitor sees requests the rate limiter refuses", () => {
   const monitor = serverSource.indexOf('app.use("/api", liveMonitorMiddleware)');
   const limiter = serverSource.indexOf("rateLimitRequests);");
   assert.ok(monitor > 0 && monitor < limiter);
+});
+
+test("referrers are counted per visitor, host only", () => {
+  const { now } = clocked();
+  const monitor = createLiveMonitor({ now });
+  monitor.touch("visitor-1", () => ({ referrer: parseReferrer("www.swurf.org") }));
+  monitor.touch("visitor-2", () => ({ referrer: parseReferrer("") }));
+  monitor.touch("visitor-3", () => ({ referrer: parseReferrer("<script>") }));
+  assert.deepEqual(monitor.snapshot().today.referrers, { "swurf.org": 1, direct: 2 });
+});
+
+test("the query log keeps events for its retention and drops older ones", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "surface-browser-queries-"));
+  try {
+    const { clock, now } = clocked();
+    const queryLogPath = path.join(dir, "queries.jsonl");
+    const monitor = createLiveMonitor({ now, queryLogPath, queryLogDays: 3 });
+    monitor.touch("visitor-1", () => ({ country: "DE", device: "phone", referrer: "swurf.org" }));
+    monitor.addEvent("visitor-1", { kind: "ai", text: "otters", bookmark: true });
+    clock.t += 4 * 24 * 60 * MINUTE;
+    monitor.touch("visitor-1");
+    monitor.addEvent("visitor-1", { kind: "page", text: "https://example.com/" });
+
+    const items = monitor.queries(0);
+    assert.equal(items.length, 1, "the 4-day-old prompt is pruned");
+    assert.equal(items[0].text, "https://example.com/");
+    assert.deepEqual([items[0].country, items[0].device, items[0].referrer, items[0].visitor], ["DE", "phone", "swurf.org", "visito"]);
+    assert.equal(createLiveMonitor({ now }).queries(0), null, "off without a path");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -49,13 +49,22 @@ test("round 2 is a round-1 source of the same bookmark, fresh or drawn; nothing 
   assert.equal(
     poolGrowthRound({ prompt: "otters", sourceRecord: generated({ genai: { prompt: "otters", parentId: "abc" } }), bookmarkPrompts }),
     0,
-    "a variation of a variation"
+    "a variation with no stored round"
   );
   assert.equal(
     poolGrowthRound({ prompt: "otters", sourceRecord: generated({ genai: { prompt: "sunday", parentId: null } }), bookmarkPrompts }),
     0,
     "a request prompt that is not the source's lineage prompt"
   );
+});
+
+test("later rounds follow the source's stored round, up to maxRound", () => {
+  const ofRound = (round) => generated({ genai: { prompt: "otters", parentId: "abc", round } });
+  assert.equal(poolGrowthRound({ prompt: "otters", sourceRecord: ofRound(2), bookmarkPrompts }), 0, "default maxRound is 2");
+  assert.equal(poolGrowthRound({ prompt: "otters", sourceRecord: ofRound(2), bookmarkPrompts, maxRound: 4 }), 3);
+  assert.equal(poolGrowthRound({ prompt: "otters", sourceRecord: ofRound(3), bookmarkPrompts, maxRound: 4 }), 4);
+  assert.equal(poolGrowthRound({ prompt: "otters", sourceRecord: ofRound(4), bookmarkPrompts, maxRound: 4 }), 0, "round 5");
+  assert.equal(poolGrowthRound({ prompt: "otters", sourceRecord: ofRound(0), bookmarkPrompts, maxRound: 4 }), 0, "an imported lineage");
 });
 
 test("a missing store is empty and writable; a kept member reloads under its key", () => {

@@ -30,3 +30,5 @@ current
 server-logs/
 server/live-stats.json
 __pycache__/
+server/queries.jsonl
+server/*.tmp

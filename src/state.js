@@ -8,6 +8,9 @@
 // DOM-derived and time-based initial values (currentQuery, cameraSpeed,
 // fpsAccumulatorStart) are set during boot in main.js; the defaults here are
 // placeholders so the object shape is complete from module load.
+//
+// Each group names the module that owns it. Writes from anywhere else are
+// resets or hand-offs; a new one should go through the owner where it can.
 
 import { AppState } from "./constants.js";
 import { createMicrogestureLatch } from "./xr-microgestures.js";
@@ -22,12 +25,12 @@ import {
 } from "./idle-auto-advance.js";
 
 export const state = {
-  // Tunnel mesh + path — rebuilt by rebuildTunnel().
+  // Tunnel mesh + path — rebuilt by rebuildTunnel(). Owner: tunnel.js.
   tunnelMesh: null,
   tunnelSamples: null,
   tunnelConfig: null,
 
-  // Tunnel image-panel spawn pipeline.
+  // Tunnel image-panel spawn pipeline. Owner: tunnel.js.
   pendingPanelItems: [],
   spawnAccumulatorMs: 0,
   lastSpawnedPanelRing: 25,
@@ -35,7 +38,8 @@ export const state = {
   // scene array, this stays monotonic when panels scroll behind the camera.
   tunnelSpawnedPanelCount: 0,
 
-  // Extraction / current page.
+  // Extraction / current page. Owner: api.js (the load). extractedItems has six
+  // writers; the scene modules swap it when a run or sphere changes.
   extractedItems: [],
   currentQuery: "",
   currentLoadMode: "url",
@@ -60,6 +64,9 @@ export const state = {
   // Whether generated image-list rows are clickable. Mirrors
   // GENAI_IMAGE_LIST_LINKS from /api/health; see linkOrText() in api.js.
   imageListLinksEnabled: true,
+  // Download buttons in the image list: offered where settings are on (a local
+  // or operator setup), not on the public build.
+  imageDownloadsEnabled: false,
   genAiBatchReceived: 0,
   genAiBatchExpected: 0,
   genAiBatchComplete: true,
@@ -88,7 +95,8 @@ export const state = {
   cycleRequestInFlight: false,
   autoGalleryMode: false,
 
-  // State machine.
+  // State machine. Owner: transitions.js; sphere.js and api.js hand it the
+  // pendingExit* triple.
   appState: AppState.TUNNEL,
   tunnelSettledMs: 0,
   targetSphereRing: -1,
@@ -108,7 +116,8 @@ export const state = {
   // progress (0→1) can be parameterized regardless of cameraSpeed.
   sphereExitStartRing: 0,
 
-  // Iris / sphere rotation animation.
+  // Iris / sphere rotation animation. Owner: sphere.js; input.js drives the
+  // rotation speeds and their coast.
   irisXRot: 0,
   irisYRot: 0,
   irisXSpeed: 0.3,
@@ -175,6 +184,7 @@ export const state = {
   sphereTextureCycleRadians: 0,
 
   // Input latches. One edge-latch per logical action so a held button fires once.
+  // Owner: input.js.
   xrExitLatch: false,
   xrExitHoldSeconds: 0,
   // 0..1, written by input.js beside the head-locked indicator. Published as a
@@ -229,7 +239,9 @@ export const state = {
   // setWristPanelHand()). Default "left" so the dominant hand stays free to poke.
   wristPanelHand: "left",
 
-  // Camera traverse along the tunnel path.
+  // Camera traverse along the tunnel path. Owner: transitions.js. cameraSpeed
+  // has four writers (input, main, sphere, transitions), so a speed bug can start
+  // in any of them.
   currentRingFloat: 5,
   cameraSpeed: 0,
   // True while a new run is giving back the speed the sphere exit borrowed (see
@@ -240,7 +252,7 @@ export const state = {
   // Tunnel portal clip toggle.
   tunnelPortalClipActive: false,
 
-  // Perf HUD accumulators.
+  // Perf HUD accumulators. Owner: ui.js.
   frameCounter: 0,
   fpsAccumulatorStart: 0
 };

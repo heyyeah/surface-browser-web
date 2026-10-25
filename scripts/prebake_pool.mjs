@@ -558,7 +558,7 @@ async function readServerEmojiSet() {
 }
 
 function splitEmoji(raw) {
-  // Same grapheme rule as server/vary-modifiers.js: one emoji is often several
+  // Same grapheme rule as shared/vary-modifiers.js: one emoji is often several
   // code points, so splitting on code points would shatter them.
   const parts = String(raw).split(/\s+/).filter(Boolean);
   if (parts.length > 1) return parts;

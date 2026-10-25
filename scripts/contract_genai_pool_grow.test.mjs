@@ -268,7 +268,7 @@ test("round 2: chording a round-1 image keeps its variations, whether that base 
 
 // --- never kept ----------------------------------------------------------
 
-test("not kept: a typed prompt, a negative prompt, and round 3", async () => {
+test("not kept: a typed prompt, a negative prompt, and round 5; rounds 3 and 4 are", async () => {
   const growDir = tempDir("grow");
   await withGrowServer({ growDir }, async ({ server, mock }) => {
     const typed = await postGenAi(server, { prompt: "kangaroos on a tram", count: COUNT });
@@ -280,17 +280,23 @@ test("not kept: a typed prompt, a negative prompt, and round 3", async () => {
     assert.equal(readManifest(growDir), null, "nothing was kept");
 
     const round1 = await postGenAi(server, { prompt: BOOKMARK, count: COUNT });
-    const base = round1.json.items[0];
-    const round2 = await postGenAi(server, { source: { id: base.genai.id }, count: COUNT });
-    const variation = variationsOf(round2.json, base)[0];
-    const keptBefore = kept(growDir).length;
-    assert.ok(keptBefore > COUNT);
+    let source = round1.json.items[0];
+    for (const round of [2, 3, 4]) {
+      const keptBefore = kept(growDir).length;
+      const response = await postGenAi(server, { source: { id: source.genai.id }, count: COUNT });
+      assert.equal(response.status, 200);
+      const variation = variationsOf(response.json, source)[0];
+      assert.equal(variation.genai.round, round);
+      assert.ok(kept(growDir).length > keptBefore, `round ${round} was not kept`);
+      source = variation;
+    }
 
-    const round3 = await postGenAi(server, { source: { id: variation.genai.id }, count: COUNT });
-    assert.equal(round3.status, 200);
-    assert.equal(kept(growDir).length, keptBefore, "a variation of a variation was kept");
-    const variationAddress = await addressOf(server, variation);
-    assert.equal(kept(growDir).some((m) => m.entry.sourceKey === variationAddress), false);
+    const keptBefore = kept(growDir).length;
+    const round5 = await postGenAi(server, { source: { id: source.genai.id }, count: COUNT });
+    assert.equal(round5.status, 200);
+    assert.equal(kept(growDir).length, keptBefore, "round 5 was kept");
+    const sourceAddress = await addressOf(server, source);
+    assert.equal(kept(growDir).some((m) => m.entry.sourceKey === sourceAddress), false);
   });
 });
 
@@ -325,10 +331,69 @@ test("the per-key cap holds, and the batch is still full", async () => {
     for (let round = 0; round < 2; round += 1) {
       const { status, json } = await postGenAi(server, { prompt: BOOKMARK, count: COUNT });
       assert.equal(status, 200);
-      assert.equal(json.items.length, COUNT, "a full key still shows fresh images");
+      assert.equal(json.items.length, COUNT, "a full key still fills the batch");
       assert.equal(kept(growDir).length, 3);
     }
-    assert.equal(await providerImages(mock), COUNT * 2);
+    // Round two: the full key gives its 3, and only the slot it cannot fill is bought.
+    assert.equal(await providerImages(mock), COUNT + 1);
+  });
+});
+
+test("a grown-out key buys nothing, even with fresh images configured", async () => {
+  const growDir = tempDir("grow");
+  await withGrowServer({
+    growDir,
+    env: { GENAI_POOL_GROW_MAX_PER_KEY: String(COUNT), GENAI_POOL_FRESH_MIN: "2", GENAI_POOL_FRESH_MAX: "2" }
+  }, async ({ server, mock }) => {
+    assert.equal((await postGenAi(server, { prompt: BOOKMARK, count: COUNT })).status, 200);
+    assert.equal(kept(growDir).length, COUNT);
+    const spent = await providerImages(mock);
+    const { status, json } = await postGenAi(server, { prompt: BOOKMARK, count: COUNT });
+    assert.equal(status, 200);
+    assert.equal(json.items.length, COUNT);
+    assert.equal(await providerImages(mock), spent);
+  });
+});
+
+test("growth is charged to the shared pool bucket, and past it the pool alone answers", async () => {
+  const growDir = tempDir("grow");
+  await withGrowServer({
+    growDir,
+    env: {
+      GENAI_DAILY_IMAGES_PER_IP: "2",
+      GENAI_POOL_GROW_DAILY_CAP: String(COUNT + 2),
+      GENAI_POOL_FRESH_MIN: "2",
+      GENAI_POOL_FRESH_MAX: "2",
+      SPEND_STATE_PATH: path.join(tempDir("grow-spend"), "spend-state.json")
+    }
+  }, async ({ server, mock }) => {
+    // Over the visitor's own cap of 2, but it grows the pool.
+    const first = await postGenAi(server, { prompt: BOOKMARK, count: COUNT });
+    assert.equal(first.status, 200);
+    assert.equal(first.json.items.length, COUNT);
+
+    // A typed prompt is still the visitor's to pay for.
+    assert.equal((await postGenAi(server, { prompt: "a lighthouse", count: COUNT })).status, 429);
+
+    // Two pooled + two fresh: the bucket is now exactly full.
+    assert.equal((await postGenAi(server, { prompt: BOOKMARK, count: COUNT })).status, 200);
+    const spent = await providerImages(mock);
+    assert.equal(spent, COUNT + 2);
+
+    // Out of budget: the two pooled images, nothing bought.
+    const last = await postGenAi(server, { prompt: BOOKMARK, count: COUNT });
+    assert.equal(last.status, 200);
+    assert.equal(last.json.items.length, 2);
+    assert.equal(await providerImages(mock), spent);
+    assert.equal((await logEvents(server, "genai.pool_only")).length, 1);
+
+    // The headset's async path, same answer.
+    const accepted = await postGenAi(server, { prompt: BOOKMARK, count: COUNT, async: true });
+    assert.equal(accepted.status, 202);
+    const job = await pollJob(server, accepted.json.jobId);
+    assert.equal(job.status, "complete");
+    assert.equal(job.items.length, 2);
+    assert.equal(await providerImages(mock), spent);
   });
 });
 

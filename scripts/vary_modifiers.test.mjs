@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { splitVaryModifierEntries } from "../server/vary-modifiers.js";
+import { parseVaryModifierTexts, splitVaryModifierEntries } from "../shared/vary-modifiers.js";
 
 const emojisOf = (raw) => splitVaryModifierEntries(raw).map((entry) => entry.emoji);
 
@@ -69,4 +69,11 @@ test("non-emoji tokens are dropped rather than becoming pick entries", () => {
 
 test("duplicates are preserved (repetition is the set's only weighting)", () => {
   assert.deepEqual(emojisOf("🧊🧊🌶️"), ["🧊", "🧊", "🌶️"]);
+});
+
+test("emoji texts: one per line or ';', separators tolerated, blank text skipped", () => {
+  assert.deepEqual(
+    parseVaryModifierTexts("🦦 otter, wet fur\n🌶️: hot, spicy;🥛\n🦄=unicorn\n\nno emoji here"),
+    { "🦦": "otter, wet fur", "🌶️": "hot, spicy", "🦄": "unicorn" }
+  );
 });

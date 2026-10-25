@@ -1,0 +1,119 @@
+<!doctype html>
+<!--
+  What visitors asked for over the last days. Served ONLY by the local-only
+  /admin/queries route in server/index.js; not a Vite entry point. Reads the
+  query log (QUERY_LOG_DAYS), so it is empty when that is 0.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recent queries</title>
+<style>
+  :root { color-scheme: light dark; --line: #8884; --dim: #7b7b84; --bad: #c2412d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: Canvas; color: CanvasText; }
+  header { position: sticky; top: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); background: Canvas; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 15px; margin: 0; }
+  .dim { color: var(--dim); }
+  main { padding: 14px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 4px 8px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; color: var(--dim); }
+  td.text { overflow-wrap: anywhere; min-width: 240px; }
+  td.nowrap { white-space: nowrap; }
+  tr.failed td.text { color: var(--bad); }
+  .tag { font-size: 10px; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; margin-left: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Recent queries</h1>
+  <label>last <select id="hours"><option>6</option><option selected>24</option><option>72</option><option>168</option></select> hours</label>
+  <label><select id="kind">
+    <option value="">everything</option>
+    <option value="page">web pages</option>
+    <option value="search">image searches</option>
+    <option value="ai">GenAI prompts</option>
+    <option value="vary">GenAI variations</option>
+  </select></label>
+  <span id="summary" class="dim"></span>
+</header>
+<main>
+  <table>
+    <thead><tr><th>When</th><th>Type</th><th>What</th><th>Result</th><th>Visitor</th><th>From</th><th>Device</th><th>Came via</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+<script>
+const KIND = { page: "web page", search: "image search", ai: "GenAI", vary: "GenAI variation" };
+const regionNames = (() => { try { return new Intl.DisplayNames(["en"], { type: "region" }); } catch { return null; } })();
+const country = (code) => { try { return code ? regionNames?.of(code) || code : ""; } catch { return code; } };
+let items = [];
+let appOrigin = "";
+// A variation's source image is gone by now, so it reopens as its prompt.
+const PARAM = { page: "url", search: "search", ai: "prompt", vary: "prompt" };
+
+function appLink(item) {
+  const param = PARAM[item.kind];
+  if (!param || !item.text || !appOrigin) return null;
+  const link = document.createElement("a");
+  link.href = `${appOrigin}/?${param}=${encodeURIComponent(item.text.replace(/…$/, ""))}`;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.textContent = item.text;
+  return link;
+}
+
+function td(text, className = "") {
+  const cell = document.createElement("td");
+  cell.className = className;
+  cell.textContent = text ?? "";
+  return cell;
+}
+
+function render() {
+  const kind = document.getElementById("kind").value;
+  const shown = kind ? items.filter((item) => item.kind === kind) : items;
+  const visitors = new Set(shown.map((item) => item.visitor));
+  document.getElementById("summary").textContent = `${shown.length} queries from ${visitors.size} visitors`;
+  document.getElementById("rows").replaceChildren(...shown.map((item) => {
+    const row = document.createElement("tr");
+    if (item.failed) row.className = "failed";
+    const what = td("", "text");
+    what.append(appLink(item) || item.text);
+    if (item.bookmark) {
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = "bookmark";
+      what.append(tag);
+    }
+    row.append(
+      td(new Date(item.at).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" }), "nowrap dim"),
+      td(KIND[item.kind] || item.kind, "nowrap"),
+      what,
+      td(item.note, "dim"),
+      td(item.visitor, "dim"),
+      td(country(item.country)),
+      td(item.device),
+      td(item.referrer, "dim")
+    );
+    return row;
+  }));
+}
+
+async function load() {
+  const hours = document.getElementById("hours").value;
+  const data = await (await fetch(`/admin/queries.json?hours=${hours}`)).json();
+  items = data.items || [];
+  appOrigin = data.appOrigin || "";
+  render();
+  if (!data.items) document.getElementById("summary").textContent = "The query log is off (QUERY_LOG_DAYS=0).";
+}
+
+document.getElementById("hours").addEventListener("change", load);
+document.getElementById("kind").addEventListener("change", render);
+load();
+</script>
+</body>
+</html>

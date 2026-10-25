@@ -173,7 +173,9 @@ export function createSpendGuard({
     return state.scopes[scope];
   }
 
-  function reserve(scope, { key = "", amount = 1 } = {}) {
+  // `ipLimit` replaces the per-IP cap for this key only: a shared bucket such as
+  // pool growth gets its own size and still counts towards the global cap.
+  function reserve(scope, { key = "", amount = 1, ipLimit = null } = {}) {
     const units = Math.max(0, Math.floor(Number(amount) || 0));
     if (!active || units === 0 || !SCOPES.includes(scope)) {
       return { ok: true, scope, amount: 0, key: "", day: "" };
@@ -192,9 +194,10 @@ export function createSpendGuard({
 
     const ipKey = String(key || "").trim();
     const tracked = Boolean(ipKey) && (bucket.ips.has(ipKey) || bucket.ips.size < ipTrackingMax);
-    if (limit.ip > 0 && tracked) {
+    const keyLimit = ipLimit === null ? limit.ip : normalizeCap(ipLimit);
+    if (keyLimit > 0 && tracked) {
       const used = bucket.ips.get(ipKey) || 0;
-      if (used + units > limit.ip) {
+      if (used + units > keyLimit) {
         return { ok: false, reason: "ip", scope, amount: 0, key: ipKey, day: state.day };
       }
     }
@@ -274,6 +277,45 @@ export function createSpendGuard({
       },
       estimatedUsd: estimateUsd(state)
     };
+  }
+
+  // Per-client usage for one scope, largest first. Keys are addresses (or a
+  // /64), so this stays on the localhost-only admin.
+  function clients(scope) {
+    const bucket = state.scopes[scope];
+    if (!active || !bucket) {
+      return [];
+    }
+    ensureDay();
+    return [...bucket.ips].map(([key, used]) => ({ key, used })).sort((a, b) => b.used - a.used);
+  }
+
+  // Admin reset: one client's count (and its share of the totals), or the whole
+  // scope when `key` is empty. A fail-closed day is lifted only by a full reset.
+  function reset(scope, key = "") {
+    if (!active || !SCOPES.includes(scope)) {
+      return { ok: false, freed: 0 };
+    }
+    ensureDay();
+    const bucket = bucketFor(scope);
+    let freed = 0;
+    if (key) {
+      freed = bucket.ips.get(key) || 0;
+      bucket.ips.delete(key);
+      const prefixKey = ipv6PrefixKey(key);
+      if (prefixKey && bucket.prefixes.has(prefixKey)) {
+        const next = Math.max(0, bucket.prefixes.get(prefixKey) - freed);
+        if (next === 0) bucket.prefixes.delete(prefixKey); else bucket.prefixes.set(prefixKey, next);
+      }
+      bucket.total = Math.max(0, bucket.total - freed);
+    } else {
+      freed = bucket.total;
+      state.scopes[scope] = { total: 0, ips: new Map(), prefixes: new Map() };
+      state.corrupt = false;
+    }
+    dirty = true;
+    persistNow();
+    return { ok: true, freed };
   }
 
   function estimateUsd(target) {
@@ -363,7 +405,7 @@ export function createSpendGuard({
     persistNow();
   }
 
-  return { active, reserve, release, snapshot, summaryLine: () => summaryLine(state), flush: persistNow, shutdown };
+  return { active, reserve, release, snapshot, clients, reset, summaryLine: () => summaryLine(state), flush: persistNow, shutdown };
 }
 
 function normalizeCap(raw) {

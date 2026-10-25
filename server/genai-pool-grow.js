@@ -67,13 +67,15 @@ export function bookmarkPromptSet(prompts) {
   return new Set((prompts || []).map((prompt) => normalizeText(prompt)).filter(Boolean));
 }
 
-// Which round of a bookmark lineage a request is: 1, 2, or 0 (not pooled).
+// Which round of a bookmark lineage a request is: 1 to `maxRound`, or 0 (not
+// pooled).
 //
-// The lineage's starting prompt decides, not who clicked: round 2 is pooled
-// whoever triggered it. Never pooled: a prompt that is not a bookmark (normalized
-// as the pool key normalizes it), a negative prompt, an imported raster (`origin`
-// "url"/"image_search"), and a variation of a variation (a parent id).
-export function poolGrowthRound({ prompt, negativePrompt = "", sourceRecord = null, bookmarkPrompts }) {
+// The lineage's starting prompt decides, not who clicked: later rounds are
+// pooled whoever triggered them. Never pooled: a prompt that is not a bookmark
+// (normalized as the pool key normalizes it), a negative prompt, an imported
+// raster (`origin` "url"/"image_search") anywhere in the lineage, and rounds
+// past `maxRound`.
+export function poolGrowthRound({ prompt, negativePrompt = "", sourceRecord = null, bookmarkPrompts, maxRound = 2 }) {
   const normalized = normalizeText(prompt);
   if (!normalized || !bookmarkPrompts?.has(normalized) || normalizeText(negativePrompt)) {
     return 0;
@@ -86,10 +88,14 @@ export function poolGrowthRound({ prompt, negativePrompt = "", sourceRecord = nu
   if (origin !== null && origin !== "pool") {
     return 0;
   }
-  if (sourceRecord.genai?.parentId) {
+  if (normalizeText(sourceRecord.genai?.prompt) !== normalized) {
     return 0;
   }
-  return normalizeText(sourceRecord.genai?.prompt) === normalized ? 2 : 0;
+  // genai.round is 0 when the lineage was imported. A record without one
+  // predates it, and only a parentless one is known to be round 1.
+  const sourceRound = sourceRecord.genai?.round ?? (sourceRecord.genai?.parentId ? 0 : 1);
+  const round = sourceRound ? sourceRound + 1 : 0;
+  return round <= maxRound ? round : 0;
 }
 
 // Write one image and its manifest entry, then return the updated store.

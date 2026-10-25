@@ -8,11 +8,11 @@ import {
   BookmarkKind,
   bookmarkModeLabel,
   bookmarkTitle,
-  DEFAULT_BOOKMARKS,
   isGenAiBookmarksEnabled,
   setBookmarksMenuOpen,
   setGenAiBookmarksEnabled,
-  setupBookmarks
+  setupBookmarks,
+  startFavoriteBookmarks
 } from "./bookmarks.js";
 import { createControllerMap } from "./controllermap.js";
 import {
@@ -242,12 +242,6 @@ let activeOmnibarMode = "url";
 let genAiModeEnabled = false;
 let genAiModeVisible = true;
 
-const START_FAVORITES = Object.freeze([
-  DEFAULT_BOOKMARKS.find((bookmark) => bookmark.kind === BookmarkKind.WEB_PAGE),
-  DEFAULT_BOOKMARKS.find((bookmark) => bookmark.kind === BookmarkKind.IMAGE_SEARCH),
-  DEFAULT_BOOKMARKS.find((bookmark) => bookmark.kind === BookmarkKind.GENAI_PROMPT)
-].filter(Boolean));
-
 function markMaterialForContextRestore(material) {
   if (!material) {
     return;
@@ -413,7 +407,7 @@ function renderStartPanel() {
   grid.className = "start-grid";
   startPanel.appendChild(grid);
 
-  for (const bookmark of START_FAVORITES) {
+  for (const bookmark of startFavoriteBookmarks()) {
     const isGenAi = bookmark.kind === BookmarkKind.GENAI_PROMPT;
     // No relay and no settings cog (a public build): "Configure in settings"
     // would point at a panel that 404s, so drop the tile. Where settings are
@@ -1189,6 +1183,7 @@ async function configureApiCapabilities(preloaded = null) {
     setStatusFooterEnabled(capabilities.statusFooter?.enabled !== false);
     setImageListEnabled(capabilities.imageList?.enabled !== false);
     state.imageListLinksEnabled = capabilities.imageList?.links !== false;
+    state.imageDownloadsEnabled = capabilities.settings?.enabled === true;
     state.autoAdvanceIdleTimeoutMs = normalizeIdleTimeoutMs(capabilities.autoAdvance?.idleTimeoutMs);
     state.autoAdvanceFreeIdleTimeoutMs = normalizeIdleTimeoutMs(
       capabilities.autoAdvance?.freeIdleTimeoutMs,
@@ -1247,6 +1242,18 @@ if (startupAutoQuery) {
   urlInput.value = startupAutoQuery;
 }
 renderStartPanel();
+
+// ?url= / ?search= / ?prompt= open straight into that request: /admin/queries
+// links each row here.
+const startupRequest = [["url", "url"], ["search", "image_search"], ["prompt", "genai"]]
+  .map(([param, mode]) => ({ mode, query: (startupParams.get(param) || "").trim() }))
+  .find((request) => request.query);
+if (startupRequest && !startupAutoQuery) {
+  setActiveOmnibarMode(startupRequest.mode);
+  urlInput.value = startupRequest.query;
+  hideStartPanel();
+  void loadRequestByMode(startupRequest);
+}
 
 urlInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {

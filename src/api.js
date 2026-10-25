@@ -7,6 +7,7 @@ import { urlInput, fallbackInput, extractLabel, resultsPanel, historyLabel } fro
 import { runGenAiJob } from "./genai-client.js";
 import { SESSION_HEADERS, SESSION_ID } from "./session-id.js";
 import { appendImagePanels, setImagePanels } from "./tunnel.js";
+import { loadedImageCopy } from "./proxied-texture.js";
 import { prepareForTunnelRun } from "./transitions.js";
 import { setAddressFeedback, setStatus, isImageListEnabled } from "./ui.js";
 import { genAiBatchCount } from "./settings.js";
@@ -57,7 +58,106 @@ function renderResults(items, method, warnings = []) {
       row.appendChild(document.createTextNode(" -> "));
       row.appendChild(linkOrText(item.linkUrl, item.linkUrl));
     }
+    row.className = "result-row";
+    row.appendChild(resultActions(item, index));
     resultsPanel.appendChild(row);
+  }
+}
+
+// Select does what selecting the image in the sphere does (follow its link, or
+// vary a generated image), from wherever the viewer is.
+function itemNavigationRequest(item) {
+  if (item.navigationMode && item.navigationQuery) {
+    return { mode: item.navigationMode, query: item.navigationQuery, source: item.navigationSource || null };
+  }
+  return item.linkUrl ? { mode: "url", query: item.linkUrl, source: null } : null;
+}
+
+function resultActions(item, index) {
+  const actions = document.createElement("span");
+  actions.className = "result-actions";
+  const request = itemNavigationRequest(item);
+  if (request) {
+    const select = document.createElement("button");
+    select.type = "button";
+    select.textContent = t("results.select");
+    select.addEventListener("click", () => {
+      urlInput.value = request.mode === "genai" ? genAiAddressText(request.query, request.source?.stack) : request.query;
+      setAddressFeedback(null);
+      void loadRequestByMode(request);
+    });
+    actions.appendChild(select);
+  }
+  const wrap = document.createDocumentFragment();
+  wrap.appendChild(actions);
+  if (state.imageDownloadsEnabled) {
+    const download = document.createElement("button");
+    download.type = "button";
+    download.className = "result-download";
+    download.textContent = t("results.download");
+    download.addEventListener("click", () => void downloadItemImage(item, index));
+    wrap.appendChild(download);
+  }
+  return wrap;
+}
+
+// Through our own origin: a cross-origin <a download> is ignored and just opens
+// the image. Web images come via the proxy, so at most PROXY_IMAGE_MAX_EDGE_PX.
+// A blob, not a link, so no generated-image URL is handed out
+// (GENAI_IMAGE_LIST_LINKS).
+async function downloadItemImage(item, index) {
+  const src = isOwnApiUrl(item.imageUrl)
+    ? item.imageUrl
+    : `/api/proxy/image?url=${encodeURIComponent(item.imageUrl)}`;
+  try {
+    const blob = await fetchImageBlob(src);
+    const anchor = document.createElement("a");
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = `${downloadBaseName(item, index)}.${blob.type.split("/")[1]?.replace("jpeg", "jpg") || "png"}`;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(anchor.href), 10_000);
+  } catch (err) {
+    setStatus(t("status.downloadFailed", { message: err.message }), "error");
+  }
+}
+
+// Falls back to the copy the scene drew, as PNG: a generated image leaves the
+// server's memory 30 minutes after its last use but stays on screen.
+async function fetchImageBlob(src) {
+  let failure;
+  try {
+    const response = await fetch(src, { headers: SESSION_HEADERS });
+    if (response.ok) {
+      return await response.blob();
+    }
+    failure = new Error(`HTTP ${response.status}`);
+  } catch (err) {
+    failure = err;
+  }
+  const image = loadedImageCopy(src);
+  if (!image) {
+    throw failure;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth || image.width;
+  canvas.height = image.naturalHeight || image.height;
+  canvas.getContext("2d").drawImage(image, 0, 0);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  if (!blob) {
+    throw failure;
+  }
+  return blob;
+}
+
+function downloadBaseName(item, index) {
+  const slug = (text) => String(text || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+  if (item.genai) {
+    return `${slug(item.genai.prompt) || "generated"}-${index + 1}`;
+  }
+  try {
+    return slug(new URL(item.imageUrl).pathname.split("/").pop().replace(/\.\w+$/, "")) || "image";
+  } catch {
+    return "image";
   }
 }
 

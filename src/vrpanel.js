@@ -13,7 +13,7 @@
 // (loadAndExtractUrl / loadImageSearch / loadGenAiPrompt).
 
 import * as THREE from "three";
-import { DEFAULT_BOOKMARKS, BookmarkKind } from "./bookmarks.js";
+import { DEFAULT_BOOKMARKS, BookmarkKind, bookmarkTitle, startFavoriteBookmarks } from "./bookmarks.js";
 import { canGoBack, goBack, loadAndExtractUrl, loadGenAiPrompt, loadImageSearch } from "./api.js";
 import { urlInput } from "./dom.js";
 import { menuStatusText } from "./tunnel-progress.js";
@@ -489,30 +489,11 @@ function visibleBookmarks() {
   });
 }
 
-function startFavoriteBookmarks() {
-  return [
-    DEFAULT_BOOKMARKS.find((bookmark) => bookmark.kind === BookmarkKind.WEB_PAGE),
-    DEFAULT_BOOKMARKS.find((bookmark) => bookmark.kind === BookmarkKind.IMAGE_SEARCH),
-    DEFAULT_BOOKMARKS.find((bookmark) => bookmark.kind === BookmarkKind.GENAI_PROMPT)
-  ].filter(Boolean);
-}
-
 function shouldShowStartFavorites() {
   return !(urlInput.value || "").trim()
     && !state.currentQuery
     && state.extractedItems.length === 0
     && !state.autoGalleryMode;
-}
-
-function bookmarkCellTitle(bookmark) {
-  if (bookmark.kind !== BookmarkKind.WEB_PAGE) {
-    return bookmark.value;
-  }
-  try {
-    return new URL(bookmark.value).hostname.replace(/^www\./, "");
-  } catch {
-    return bookmark.value;
-  }
 }
 
 // Actions: reuse the flat-mode load paths, then re-anchor/hide.
@@ -1381,7 +1362,7 @@ function drawPanel() {
     ctx.beginPath();
     ctx.rect(x + 14, y + 44, cellW - 28, cellH - 52);
     ctx.clip();
-    ctx.fillText(bookmarkCellTitle(bookmark), x + 16, y + 50);
+    ctx.fillText(bookmarkTitle(bookmark), x + 16, y + 50);
     ctx.restore();
 
     hitRects.push({ x, y, w: cellW, h: cellH, action });
@@ -1472,7 +1453,7 @@ function drawStartFavoritesRegion(
 
     ctx.fillStyle = enabled ? COLOR_TEXT : COLOR_TEXT_DISABLED;
     ctx.font = "700 32px 'Segoe UI', sans-serif";
-    const title = enabled ? bookmarkCellTitle(bookmark) : t("vr.configureInSettings");
+    const title = enabled ? bookmarkTitle(bookmark) : t("vr.configureInSettings");
     wrapLeftText(ctx, title, x + 18, y + 62, cellW - 36, 40, y + cellH - 80);
 
     ctx.fillStyle = COLOR_MUTED;

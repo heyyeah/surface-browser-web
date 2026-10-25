@@ -269,9 +269,10 @@ test("the spend reservation is the fresh count, not the batch size", async () =>
     assert.equal(first.status, 200, "a batch of 4 with 3 fresh must fit a cap of 3");
     assert.equal(first.json.items.length, COUNT);
 
+    // The fresh images still count against the cap, so only the pooled one is left.
     const second = await postGenAi(server, { prompt: BAKED_PROMPT, count: COUNT });
-    assert.equal(second.status, 429, "the fresh images still count against the cap");
-    assert.equal(second.json.error, "budget");
+    assert.equal(second.status, 200);
+    assert.equal(second.json.items.length, 1);
   });
 });
 

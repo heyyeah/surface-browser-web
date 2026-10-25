@@ -138,6 +138,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // The app's current options; only the model name is read.
+  if (req.method === "GET" && url.pathname === "/sdapi/v1/options") {
+    sendJson(res, 200, { model: process.env.MOCK_SDAPI_MODEL || "mock_model.ckpt", steps: 20 });
+    return;
+  }
+
   // Inspect what the server forwarded (contract tests only).
   if (req.method === "GET" && url.pathname === "/requests") {
     sendJson(res, 200, { requests: requestLog });

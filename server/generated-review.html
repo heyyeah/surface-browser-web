@@ -1,0 +1,88 @@
+<!doctype html>
+<!--
+  What the piece made recently, with the prompts. Served ONLY by the local-only
+  /admin/generated route in server/index.js; not a Vite entry point. Plain on
+  purpose, like pool-review.html. Reads the saved copies, so it is empty unless
+  GENAI_SAVE_IMAGES_TO_DISK is on.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recent generations</title>
+<style>
+  :root { color-scheme: light dark; --line: #8884; --dim: #7b7b84; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: Canvas; color: CanvasText; }
+  header { position: sticky; top: 0; z-index: 2; padding: 10px 14px; border-bottom: 1px solid var(--line); background: Canvas; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 15px; margin: 0; }
+  .dim { color: var(--dim); }
+  main { padding: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  figure { margin: 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  figure img { width: 100%; aspect-ratio: 5 / 4; object-fit: cover; display: block; background: #8882; cursor: zoom-in; }
+  figcaption { padding: 6px 8px; overflow-wrap: anywhere; }
+  .prompt { font-weight: 600; }
+  .stack { font-size: 16px; letter-spacing: 2px; }
+  .tag { font-size: 10px; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; margin-right: 4px; }
+  #zoom { position: fixed; inset: 0; background: #000d; display: none; align-items: center; justify-content: center; cursor: zoom-out; z-index: 3; }
+  #zoom img { max-width: 95vw; max-height: 95vh; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Recent generations</h1>
+  <label>last <select id="hours"><option>6</option><option selected>24</option><option>72</option></select> hours</label>
+  <span id="summary" class="dim"></span>
+</header>
+<main id="grid"></main>
+<div id="zoom"><img alt=""></div>
+<script>
+const grid = document.getElementById("grid");
+const summary = document.getElementById("summary");
+const zoom = document.getElementById("zoom");
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+async function load() {
+  const hours = document.getElementById("hours").value;
+  const data = await (await fetch(`/admin/generated.json?hours=${hours}`)).json();
+  grid.textContent = "";
+  const prompts = new Set(data.items.map((item) => item.prompt));
+  summary.textContent = data.saving
+    ? `${data.items.length} images from ${prompts.size} prompts`
+    : "Saving is off (GENAI_SAVE_IMAGES_TO_DISK=0): nothing new is recorded.";
+  for (const item of data.items) {
+    const figure = el("figure");
+    const img = el("img");
+    img.loading = "lazy";
+    img.src = `/admin/generated/image/${encodeURIComponent(item.file)}`;
+    img.alt = item.prompt || "";
+    img.addEventListener("click", () => {
+      zoom.querySelector("img").src = img.src;
+      zoom.style.display = "flex";
+    });
+    const caption = el("figcaption");
+    caption.append(el("div", "prompt", item.prompt || "(no prompt)"));
+    if (item.stack?.length) caption.append(el("div", "stack", item.stack.join("")));
+    const meta = el("div", "dim");
+    if (item.origin && item.origin !== "pool") meta.append(el("span", "tag", item.origin === "url" ? "web image" : item.origin));
+    if (item.round) meta.append(el("span", "tag", `gen ${item.round}`));
+    meta.append(new Date(item.at).toLocaleString());
+    caption.append(meta);
+    if (item.sentPrompt) caption.append(el("div", "dim", `sent: ${item.sentPrompt}`));
+    figure.append(img, caption);
+    grid.append(figure);
+  }
+}
+
+zoom.addEventListener("click", () => { zoom.style.display = "none"; });
+document.getElementById("hours").addEventListener("change", load);
+load();
+</script>
+</body>
+</html>

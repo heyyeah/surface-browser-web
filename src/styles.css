@@ -328,12 +328,16 @@ button.secondary {
   text-transform: uppercase;
 }
 
+.bookmark-mode-0 {
+  color: var(--mode-web);
+}
+
 .bookmark-mode-1 {
-  color: var(--accent);
+  color: var(--mode-search);
 }
 
 .bookmark-mode-2 {
-  color: var(--warning);
+  color: var(--mode-genai);
 }
 
 .bookmark-title {
@@ -970,6 +974,49 @@ button.secondary {
   color: var(--accent);
 }
 
+.result-row {
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.result-row > a,
+.result-row > span:not(.result-actions) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Shown on hover only, so the list stays a list of addresses. A touch screen has
+   no hover, so there they are always shown. */
+.result-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 6px;
+  visibility: hidden;
+}
+
+.result-row:hover .result-actions,
+.result-row:focus-within .result-actions {
+  visibility: visible;
+}
+
+@media (hover: none) {
+  .result-actions {
+    visibility: visible;
+  }
+}
+
+.result-actions button,
+.result-download {
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  padding: 0 8px;
+  font-size: 0.76rem;
+}
+
 /* PHONE LANDSCAPE (Tim, 2026-08-29: "in landscape the urls at the bottom have
    to be hidden"). Not a redesign — the image list defaults to collapsed (see
    ui.js, still expandable) and the toolbar gives its vertical padding back to
@@ -1093,6 +1140,46 @@ button.secondary {
   min-width: 130px;
 }
 
+/* Rows of inputs share label, input and hint tracks (subgrid), so a label that
+   wraps to two lines does not push its input below its neighbours'. */
+.settings-field-row.is-aligned {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  column-gap: 12px;
+  row-gap: 0;
+}
+
+.settings-field-row.is-aligned .settings-field {
+  grid-row: span 3;
+  grid-template-rows: subgrid;
+  row-gap: 5px;
+  min-width: 0;
+}
+
+.settings-field-row.is-aligned .settings-field > label {
+  align-items: flex-end;
+}
+
+.settings-subsection {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-advanced > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.settings-advanced[open] > summary {
+  margin-bottom: 12px;
+}
+
+details.settings-section:not([open]) {
+  gap: 0;
+}
+
 .settings-field input[type="text"],
 .settings-field input[type="password"],
 .settings-field input[type="number"],
@@ -1127,6 +1214,22 @@ button.secondary {
 .settings-source-tag.source-env {
   color: var(--accent);
   border-color: var(--accent);
+}
+
+.settings-reset-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 2px;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.settings-reset-btn:hover,
+.settings-reset-btn:focus-visible {
+  color: var(--text);
+  filter: none;
 }
 
 .settings-source-tag.source-override {
@@ -1365,4 +1468,21 @@ button.secondary {
   border-top: 1px solid var(--panel-border, #23314a);
   opacity: 0.75;
   font-size: 13px;
+}
+
+.settings-textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #2c4064;
+  background: #0b1321;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.settings-warning {
+  color: #f2b86b;
 }

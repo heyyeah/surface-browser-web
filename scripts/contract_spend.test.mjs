@@ -160,6 +160,41 @@ test("GENAI_DAILY_IMAGES_PER_IP: a per-client cap answers 429 budget/ip", async 
   }
 });
 
+test("/admin/live shows who is capped, and a reset frees that client", async () => {
+  const dir = tempDir();
+  const mock = await startMockSdapi();
+  const server = await startServer({
+    ...CLEAN,
+    GENAI_PROVIDER: "a1111",
+    GENAI_ENDPOINT: mock.base,
+    GENAI_DAILY_IMAGES_PER_IP: "2",
+    SPEND_STATE_PATH: path.join(dir, "spend-state.json")
+  });
+  const reset = (body) => fetch(`${server.base}/api/admin/quota/reset`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  try {
+    assert.equal((await genai(server, { prompt: "a", count: 2 })).status, 200);
+    const { quota } = await (await fetch(`${server.base}/admin/live.json`)).json();
+    assert.equal(quota.genai.used, 2);
+    const [client] = quota.genai.clients;
+    assert.deepEqual([client.used, client.limit], [2, 2]);
+    assert.equal((await genai(server, { prompt: "b", count: 1 })).status, 429);
+
+    const freed = await reset({ scope: "genai", key: client.key });
+    assert.equal(freed.status, 200);
+    assert.equal((await freed.json()).quota.genai.used, 0);
+    assert.equal((await genai(server, { prompt: "b", count: 1 })).status, 200);
+    assert.equal((await reset({ scope: "nope" })).status, 400);
+  } finally {
+    await server.stop();
+    await mock.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a failing provider releases the reservation instead of burning quota", async () => {
   const dir = tempDir();
   const server = await startServer({

@@ -12,6 +12,26 @@ const RETRY_JITTER = 0.25;
 // instead of drawing 503s.
 const MAX_CONCURRENT_FETCHES = 4;
 
+// The scene's copy of each image by URL, so Download still has it after the
+// server has dropped a generated one. Weak: the panel's texture owns it.
+const LOADED_IMAGES_MAX = 500;
+const loadedImages = new Map();
+
+function rememberImage(url, texture) {
+  if (!texture?.image) {
+    return;
+  }
+  loadedImages.delete(url);
+  loadedImages.set(url, new WeakRef(texture.image));
+  if (loadedImages.size > LOADED_IMAGES_MAX) {
+    loadedImages.delete(loadedImages.keys().next().value);
+  }
+}
+
+function loadedImageCopy(url) {
+  return loadedImages.get(url)?.deref() || null;
+}
+
 let activeFetches = 0;
 const fetchQueue = [];
 
@@ -57,7 +77,10 @@ async function fetchBlobLimited(url, attempt) {
 
 function loadProxiedTexture(url, onLoad, onError) {
   if (!url.startsWith("/api/proxy/image")) {
-    textureLoader.load(url, onLoad, undefined, onError);
+    textureLoader.load(url, (texture) => {
+      rememberImage(url, texture);
+      onLoad(texture);
+    }, undefined, onError);
     return;
   }
   const tryFetch = (attempt) => {
@@ -72,6 +95,7 @@ function loadProxiedTexture(url, onLoad, onError) {
           objectUrl,
           (texture) => {
             URL.revokeObjectURL(objectUrl);
+            rememberImage(url, texture);
             onLoad(texture);
           },
           undefined,
@@ -86,4 +110,4 @@ function loadProxiedTexture(url, onLoad, onError) {
   tryFetch(0);
 }
 
-export { loadProxiedTexture };
+export { loadProxiedTexture, loadedImageCopy };

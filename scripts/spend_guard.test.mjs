@@ -477,3 +477,19 @@ test("/48 counters survive a restart", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("reset frees one client's count, or the whole scope", () => {
+  const guard = createSpendGuard({ caps: { genaiDaily: 10, genaiDailyPerIp: 3 } });
+  guard.reserve("genai", { key: "1.2.3.4", amount: 3 });
+  guard.reserve("genai", { key: "5.6.7.8", amount: 2 });
+  assert.equal(guard.reserve("genai", { key: "1.2.3.4", amount: 1 }).ok, false);
+  assert.deepEqual(guard.clients("genai"), [{ key: "1.2.3.4", used: 3 }, { key: "5.6.7.8", used: 2 }]);
+
+  assert.deepEqual(guard.reset("genai", "1.2.3.4"), { ok: true, freed: 3 });
+  assert.equal(guard.snapshot().genai.total, 2);
+  assert.equal(guard.reserve("genai", { key: "1.2.3.4", amount: 1 }).ok, true);
+
+  assert.deepEqual(guard.reset("genai"), { ok: true, freed: 3 });
+  assert.equal(guard.snapshot().genai.total, 0);
+  assert.deepEqual(guard.clients("genai"), []);
+});
