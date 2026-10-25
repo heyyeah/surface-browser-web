@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import { startServer, startMockFal } from "./contract_helpers.mjs";
 import { buildPoolKey } from "../server/genai-pool.js";
 
-// A GENAI_PROMPT bookmark in src/bookmark-presets.js.
+// A GENAI_PROMPT bookmark in shared/bookmark-presets.js.
 const BOOKMARK = "otters";
 const COUNT = 4;
 const MODEL = "fal-ai/flux-2/klein/4b";

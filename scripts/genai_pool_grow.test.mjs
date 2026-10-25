@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
-import { genAiBookmarkPrompts } from "../src/bookmark-presets.js";
+import { genAiBookmarkPrompts } from "../shared/bookmark-presets.js";
 import { addGrownMember, bookmarkPromptSet, loadGrowStore, poolGrowthRound } from "../server/genai-pool-grow.js";
 import { applyPoolSuppression, mergePools } from "../server/genai-pool-pack.js";
 

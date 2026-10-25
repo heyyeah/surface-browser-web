@@ -25,7 +25,7 @@ import {
 } from "../server/playwright-render.js";
 import { encodePng } from "./png.mjs";
 
-const SERVER_SOURCE = fs.readFileSync(new URL("../server/index.js", import.meta.url), "utf8");
+const SERVER_SOURCE = fs.readFileSync(new URL("../server/extract.js", import.meta.url), "utf8");
 const E2E = process.env.RENDER_E2E === "1";
 
 test("server wiring: the fallback fulfils from Node, never route.continue()s to the network", () => {

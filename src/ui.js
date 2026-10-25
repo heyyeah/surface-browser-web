@@ -256,6 +256,32 @@ function setupResultsDisclosure() {
   }
 }
 
+// Marks the list row of the image selected in the sphere. Called every frame;
+// a rebuilt list (new rows, no class) is detected by the row no longer carrying it.
+let selectedResultRow = null;
+
+function syncSelectedResultRow() {
+  if (!resultsPanel || resultsPanel.hidden) {
+    return;
+  }
+  const panel = state.appState === AppState.INSIDE_SPHERE ? spherePanels[state.sphereSelectedIndex] : null;
+  const index = panel ? panel.itemIndex : -1;
+  const row = index >= 0 ? resultsPanel.querySelector(`.result-row[data-item-index="${index}"]`) : null;
+  if (row === selectedResultRow && (!row || row.classList.contains("is-selected"))) {
+    return;
+  }
+  selectedResultRow?.classList.remove("is-selected");
+  selectedResultRow = row;
+  if (row) {
+    row.classList.add("is-selected");
+    // Scroll the list only: scrollIntoView would also move the page.
+    const top = row.offsetTop - resultsPanel.offsetTop;
+    if (top < resultsPanel.scrollTop || top + row.offsetHeight > resultsPanel.scrollTop + resultsPanel.clientHeight) {
+      resultsPanel.scrollTop = top - (resultsPanel.clientHeight - row.offsetHeight) / 2;
+    }
+  }
+}
+
 // Hides the panel outright as well as gating its contents, so turning it off
 // reclaims the space under the canvas rather than leaving an empty strip.
 function setImageListEnabled(enabled) {
@@ -1065,6 +1091,7 @@ export {
   isStatusFooterEnabled,
   setImageListEnabled,
   isImageListEnabled,
+  syncSelectedResultRow,
   setResultsCollapsed,
   isResultsCollapsed,
   sphereIdentityForItem

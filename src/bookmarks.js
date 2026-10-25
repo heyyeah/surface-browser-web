@@ -3,7 +3,7 @@
 import { loadAndExtractUrl, loadGenAiPrompt, loadImageSearch } from "./api.js";
 import { bookmarksBtn, bookmarksMenu, urlInput } from "./dom.js";
 import { setAddressFeedback, focusSceneCanvas } from "./ui.js";
-import { BookmarkKind, DEFAULT_BOOKMARKS, bookmarkTitle, pickStartBookmarks } from "./bookmark-presets.js";
+import { BookmarkKind, DEFAULT_BOOKMARKS, bookmarkTitle, pickStartBookmarks } from "../shared/bookmark-presets.js";
 import { t } from "./i18n.js";
 
 let genAiBookmarksEnabled = false;

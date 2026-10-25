@@ -20,6 +20,9 @@ export const IMAGE_SPAWN_INTERVAL_MS = 1300;
 export const MAX_PANELS = 15;
 export const SPHERE_IMAGE_COUNT = 8;
 export const SPHERE_DWELL_SECONDS = 20;
+// A new panel takes the gaze selection only once it is this much nearer the view
+// centre than the selected one.
+export const SPHERE_SELECTION_HYSTERESIS_RAD = 1.5 * Math.PI / 180;
 export const SPHERE_ENTRY_SETTLE_MS = 1200;
 // The GenAI tunnel handoff is gated by job completeness, not a timer. The
 // default must be 0 (transition once all expected images have arrived and the

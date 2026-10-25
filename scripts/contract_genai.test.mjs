@@ -547,6 +547,28 @@ test("drawthings auto style: a repaint model gets every stack emoji's text", asy
   }, { MOCK_SDAPI_MODEL: "moss_image_sft_q8p.ckpt" });
 });
 
+test("vary: no variation picks an emoji already in its chain while others remain", async () => {
+  await withA1111({ GENAI_VARY_MODIFIERS: "🧊 🦦 🦘 🌹 🍌 💡", GENAI_VARY_MODIFIER_MODE: "per-image" }, async ({ server }) => {
+    const post = async (body) => (await fetch(`${server.base}/api/genai`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    })).json();
+    let source = (await post({ prompt: "a lighthouse", count: 1 })).items[0];
+    for (let round = 0; round < 4; round += 1) {
+      const json = await post({ source: { id: source.genai.id }, count: 3 });
+      const chain = source.genai.modifier?.stack || [];
+      const made = json.items.filter((item) => item.genai.parentId === source.genai.id);
+      assert.equal(made.length, 3);
+      for (const item of made) {
+        assert.ok(!chain.includes(item.genai.modifier.emoji), `${item.genai.modifier.emoji} is already in ${chain.join("")}`);
+        assert.equal(item.genai.modifier.stack.length, chain.length + 1, "the chain grows by one");
+      }
+      source = json.items.at(-1);
+    }
+  });
+});
+
 test("/api/genai/image: each use renews the TTL, unused images still expire", async () => {
   await withA1111({ GENAI_IMAGE_CACHE_TTL_MS: "600" }, async ({ server }) => {
     const gen = await fetch(`${server.base}/api/genai`, {

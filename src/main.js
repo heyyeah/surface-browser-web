@@ -146,7 +146,8 @@ import {
   updatePerfLabel,
   updateStatusFooter,
   setStatusFooterEnabled,
-  setImageListEnabled
+  setImageListEnabled,
+  syncSelectedResultRow
 } from "./ui.js";
 
 if (DEV_TOOLS_ENABLED) {
@@ -971,6 +972,7 @@ function renderFrame() {
   // event: its release is a timeout only a frame can notice. The wheel listener
   // only records.
   applyTrackpadPinchInput();
+  syncSelectedResultRow();
 
   if (state.appState === AppState.EXITING_SPHERE) {
     state.cameraSpeed = clamp(state.cameraSpeed + SPHERE_EXIT_ACCEL * dt, 4, SPHERE_EXIT_MAX_SPEED);

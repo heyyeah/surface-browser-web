@@ -309,6 +309,38 @@ test("a provider outage falls back to pooled images rather than gaps", async () 
   }, { MOCK_FAL_FAIL_AFTER: "0" });
 });
 
+test("an outage part-way through a sync batch charges only the images it bought", async () => {
+  // 1 pooled + 3 fresh; the mock makes one image and then refuses (503, not
+  // billed). The pool fills what it can, and only the one bought image stays
+  // charged, as on the async path.
+  const spendDir = fs.mkdtempSync(path.join(os.tmpdir(), "surface-browser-pool-spend-"));
+  try {
+    await withPoolServer({
+      GENAI_DAILY_IMAGE_CAP: "10",
+      SPEND_STATE_PATH: path.join(spendDir, "spend-state.json"),
+      GENAI_POOL_FRESH_MIN: "1",
+      GENAI_POOL_FRESH_MAX: "1"
+    }, async ({ server }) => {
+      const used = async () => (await (await fetch(`${server.base}/admin/live.json`)).json()).quota.genai.used;
+      const partial = await postGenAi(server, { prompt: BAKED_PROMPT, count: COUNT });
+      assert.equal(partial.status, 200, "a batch with images in it is served");
+      assert.equal(partial.json.items.length, 2, "the pooled base and the one fresh image");
+      assert.equal(await used(), 1);
+
+      // Now nothing is bought at all: the pool answers and the reservation comes back.
+      const outage = await postGenAi(server, { prompt: BAKED_PROMPT, count: COUNT });
+      assert.equal(outage.status, 200);
+      assert.equal(outage.json.items.length, 1);
+      assert.equal(await used(), 1);
+      const pooled = genAiLogEvents(server).filter((entry) => entry.event === "genai.pooled");
+      assert.equal(pooled.length, 2);
+      assert.ok(pooled.every((entry) => entry.async === false), "sync requests are logged as sync");
+    }, { MOCK_FAL_FAIL_AFTER: "1" });
+  } finally {
+    fs.rmSync(spendDir, { recursive: true, force: true });
+  }
+});
+
 test("the async job path pools too, and reports done", async () => {
   await withPoolServer({}, async ({ server, mock }) => {
     const source = await drawPooledBase(server);

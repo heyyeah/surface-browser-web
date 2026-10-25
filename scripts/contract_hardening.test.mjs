@@ -525,7 +525,7 @@ test("DNS pinning mechanism: fetch() only reaches an address the dispatcher's lo
       /ENOTFOUND|EAI_AGAIN/
     );
 
-    // Same construction as createPinnedDispatcher() in server/index.js: a
+    // Same construction as createPinnedDispatcher() in server/net-policy.js: a
     // custom connect.lookup handing back the already-validated address,
     // ignoring whatever hostname undici asks about.
     const dispatcher = new UndiciAgent({

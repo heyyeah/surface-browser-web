@@ -59,6 +59,7 @@ function renderResults(items, method, warnings = []) {
       row.appendChild(linkOrText(item.linkUrl, item.linkUrl));
     }
     row.className = "result-row";
+    row.dataset.itemIndex = String(index);
     row.appendChild(resultActions(item, index));
     resultsPanel.appendChild(row);
   }
@@ -191,7 +192,7 @@ function genAiItemStack(item) {
 
 function describeItemNode(item, index, total) {
   if (!item.genai) {
-    return linkOrText(item.imageUrl, item.imageUrl);
+    return linkOrText(item.imageUrl, item.imageUrl, fileNameRange(item.imageUrl));
   }
   const prompt = item.genai.prompt || "generated";
   const from = state.genAiLineageOrdinal ? ` #${state.genAiLineageOrdinal}` : "";
@@ -201,10 +202,20 @@ function describeItemNode(item, index, total) {
   // third round shows the whole path.
   const stack = genAiItemStack(item);
   if (stack.length) {
-    return linkOrText(item.imageUrl, `${prompt}${from} ${stack.join("")}`);
+    const label = `${prompt}${from} ${stack.join("")}`;
+    return linkOrText(item.imageUrl, label, [0, label.length]);
   }
   // No emoji: a plain prompt batch, where position is all that tells images apart.
-  return linkOrText(item.imageUrl, `${prompt}${from} (${index + 1}/${total})`);
+  const label = `${prompt}${from} (${index + 1}/${total})`;
+  return linkOrText(item.imageUrl, label, [0, label.length]);
+}
+
+// The file name in an image URL: after the last "/" of the path, before any query.
+// It is what turns white on the row of the image selected in the sphere.
+function fileNameRange(url) {
+  const end = url.search(/[?#]/) >= 0 ? url.search(/[?#]/) : url.length;
+  const start = url.lastIndexOf("/", end - 1) + 1;
+  return start > 0 && start < end && !url.slice(0, start).endsWith("//") ? [start, end] : null;
 }
 
 // GENAI_IMAGE_LIST_LINKS off makes a row inert text rather than hiding it, so
@@ -218,18 +229,30 @@ function describeItemNode(item, index, total) {
 //
 // The test is broader than the name: anything same-origin under /api/ is gated,
 // so a future item type returning one of our URLs is covered automatically.
-function linkOrText(href, label) {
+function linkOrText(href, label, nameRange = null) {
   if (isOwnApiUrl(href) && !state.imageListLinksEnabled) {
     const span = document.createElement("span");
-    span.textContent = label;
+    setLabel(span, label, nameRange);
     return span;
   }
   const anchor = document.createElement("a");
   anchor.href = href;
-  anchor.textContent = label;
+  setLabel(anchor, label, nameRange);
   anchor.target = "_blank";
   anchor.rel = "noreferrer";
   return anchor;
+}
+
+function setLabel(element, label, nameRange) {
+  if (!nameRange) {
+    element.textContent = label;
+    return;
+  }
+  const [start, end] = nameRange;
+  const name = document.createElement("span");
+  name.className = "result-name";
+  name.textContent = label.slice(start, end);
+  element.append(label.slice(0, start), name, label.slice(end));
 }
 
 function requestIdentity(entry) {

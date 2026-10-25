@@ -13,19 +13,13 @@
 
 import { settingsBtn } from "./dom.js";
 import { parseVaryModifierTexts, splitVaryModifierEntries } from "../shared/vary-modifiers.js";
+import { GENAI_DEFAULT_ENDPOINTS, GENAI_PROVIDER_ENDPOINT_KEYS, GENAI_PROVIDERS } from "../shared/genai-provider-table.js";
 
 const SETTINGS_TOKEN_HEADER = "x-settings-token";
 const IMAGE_SEARCH_PROVIDERS = [
   { value: "ddg", label: "Default (DuckDuckGo, no key)" },
   { value: "serper", label: "Serper" },
   { value: "brave", label: "Brave" },
-  { value: "custom", label: "Custom endpoint" }
-];
-const GENAI_PROVIDERS = [
-  { value: "", label: "Not configured" },
-  { value: "drawthings", label: "Draw Things (local)" },
-  { value: "a1111", label: "A1111 server" },
-  { value: "fal", label: "Hosted (fal.ai)" },
   { value: "custom", label: "Custom endpoint" }
 ];
 const GENAI_VARY_SEED_MODES = [
@@ -46,16 +40,6 @@ const GENAI_VARY_MODIFIER_PAYLOADS = [
   { value: "text", label: "Text phrase" },
   { value: "emoji", label: "Raw emoji" }
 ];
-const GENAI_DEFAULT_ENDPOINTS = {
-  drawthings: "http://127.0.0.1:7860",
-  a1111: "http://127.0.0.1:8022",
-  custom: ""
-};
-const GENAI_PROVIDER_ENDPOINT_KEYS = {
-  drawthings: "GENAI_DRAWTHINGS_ENDPOINT",
-  a1111: "GENAI_A1111_ENDPOINT",
-  custom: "GENAI_CUSTOM_ENDPOINT"
-};
 const GENAI_TIP = "Easiest local: install Draw Things (free, Mac App Store), download a model "
   + "(FLUX.1 schnell is the current recommendation), enable Settings -> API Server, and pick "
   + "\"Draw Things\" here. Self-hosted server: run AUTOMATIC1111 / SD.Next / Forge on your box "

@@ -981,6 +981,11 @@ button.secondary {
   flex-wrap: wrap;
 }
 
+/* The image selected in the sphere: its name (not the path) turns white. */
+.result-row.is-selected .result-name {
+  color: #fff;
+}
+
 .result-row > a,
 .result-row > span:not(.result-actions) {
   min-width: 0;

@@ -5,6 +5,7 @@ import * as THREE from "three";
 import { loadProxiedTexture } from "./proxied-texture.js";
 import {
   SPHERE_IDLE_COLOR,
+  SPHERE_SELECTION_HYSTERESIS_RAD,
   SPHERE_IMAGE_COUNT,
   SPHERE_ENTRY_LEAD_RINGS,
   SPHERE_ENTRY_AFTER_LAST_PANEL_RINGS,
@@ -794,6 +795,7 @@ function updateSphereSelectionTint(dt) {
 
   let nextSelected = state.sphereSelectedIndex;
   let bestDot = -Infinity;
+  let currentDot = -Infinity;
 
   for (let i = 0; i < spherePanels.length; i += 1) {
     const panel = spherePanels[i];
@@ -809,10 +811,23 @@ function updateSphereSelectionTint(dt) {
     panel.container.localToWorld(_gazePanelPos);
     _gazePanelDir.copy(_gazePanelPos).sub(_gazeCameraPos).normalize();
     const dot = _gazePanelDir.dot(_gazeCameraForward);
+    if (i === state.sphereSelectedIndex) {
+      currentDot = dot;
+    }
     if (dot > bestDot) {
       bestDot = dot;
       nextSelected = i;
     }
+  }
+
+  // Hysteresis: two panels almost equally near the view centre would otherwise
+  // trade the selection every frame under head tremor or the idle drift.
+  if (
+    nextSelected !== state.sphereSelectedIndex
+    && currentDot > -Infinity
+    && Math.acos(Math.min(1, currentDot)) - Math.acos(Math.min(1, bestDot)) < SPHERE_SELECTION_HYSTERESIS_RAD
+  ) {
+    nextSelected = state.sphereSelectedIndex;
   }
 
   if (nextSelected !== state.sphereSelectedIndex) {

@@ -68,7 +68,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildPoolKey, poolSourceAddress } from "../server/genai-pool.js";
-import { genAiBookmarkPrompts } from "../src/bookmark-presets.js";
+import { genAiBookmarkPrompts } from "../shared/bookmark-presets.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoClient = path.join(here, "..");

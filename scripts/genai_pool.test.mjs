@@ -26,12 +26,14 @@ const bakerSource = fs
   .readFileSync(path.join(here, "prebake_pool.mjs"), "utf8")
   .replace(/\/\*[\s\S]*?\*\//g, "")
   .replace(/^\s*\/\/.*$/gm, "");
-// Line comments only. index.js has no block comments, and stripping them
-// anyway would swallow two thirds of the file: an Accept header in it contains
+// Line comments only. The server has no block comments, and stripping them
+// anyway would swallow most of index.js: an Accept header in it contains
 // "image/*,*/*", which the naive pattern reads as a comment that never ends.
-const serverSource = fs
-  .readFileSync(path.join(here, "../server/index.js"), "utf8")
+const readServerSource = (file) => fs
+  .readFileSync(path.join(here, "../server", file), "utf8")
   .replace(/^\s*\/\/.*$/gm, "");
+const plannerSource = readServerSource("genai-pool-runtime.js");
+const generatorSource = readServerSource("genai-jobs.js");
 
 // --- the key -------------------------------------------------------------
 
@@ -402,16 +404,16 @@ test("ALIGNMENT: the pool key and the generated image read the same seed and sal
   // is made with one emoji and filed under another's key, and every later
   // lookup of that key returns the wrong picture. Both sides must derive it
   // from composeVaryModifier(batchSeed, index) and nothing else.
-  const planner = serverSource.slice(
-    serverSource.indexOf("function buildGenAiPoolSlots"),
-    serverSource.indexOf("function planGenAiPoolBatch")
+  const planner = plannerSource.slice(
+    plannerSource.indexOf("function buildGenAiPoolSlots"),
+    plannerSource.indexOf("function planGenAiPoolBatch")
   );
   assert.match(planner, /composeVaryModifier\(\{[^}]*seed: batchSeed[^}]*salt: index/s);
   // The generator's loop index is the salt, and the batch seed is handed in
   // rather than minted a second time.
-  assert.match(serverSource, /const baseSeed = batchSeed \?\? seed \?\? createGenAiSeed\(\)/);
-  assert.match(serverSource, /modifierSeed: baseSeed,\s*modifierIndexBase: index/);
+  assert.match(generatorSource, /const baseSeed = batchSeed \?\? seed \?\? createGenAiSeed\(\)/);
+  assert.match(generatorSource, /modifierSeed: baseSeed,\s*modifierIndexBase: index/);
   // And the batch stays `count` long whatever the pool covers, so the strength
   // ramp and the salt still correspond to the slot each image occupies.
-  assert.match(serverSource, /for \(let index = 0; index < count; index \+= 1\) \{/);
+  assert.match(generatorSource, /for \(let index = 0; index < count; index \+= 1\) \{/);
 });

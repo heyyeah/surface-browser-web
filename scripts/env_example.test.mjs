@@ -21,8 +21,9 @@ function serverEnvNames() {
     }
   }
   // Settings are read through process.env[key], so their keys count too.
-  const source = read("server/index.js");
+  const source = read("server/settings.js");
   const start = source.indexOf("const SETTING_DEFINITIONS");
+  assert.ok(start >= 0, "SETTING_DEFINITIONS not found in server/settings.js");
   const block = source.slice(start, source.indexOf("\n};", start));
   for (const match of block.matchAll(/^ {2}([A-Z][A-Z0-9_]+):/gm)) {
     names.add(match[1]);
